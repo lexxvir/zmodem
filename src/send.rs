@@ -61,8 +61,6 @@ pub fn send<RW, R>(rw: RW, r: &mut R, filename: &str, filesize: Option<u32>) -> 
     where RW: Read + Write,
           R:  Read + Seek
 {
-    let mut state = State::new();
-
     let mut rw_log = rwlog::ReadWriteLog::new(rw);
 
     let mut data = [0; SUBPACKET_SIZE];
@@ -70,6 +68,8 @@ pub fn send<RW, R>(rw: RW, r: &mut R, filename: &str, filesize: Option<u32>) -> 
 
     // TODO: decide does it need?
     // write_zrqinit(&mut rw_log)?;
+
+    let mut state = State::new();
 
     while state != State::Done {
         rw_log.flush()?;
