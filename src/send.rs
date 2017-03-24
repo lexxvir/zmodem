@@ -4,14 +4,26 @@ use consts::*;
 use proto::*;
 use rwlog;
 
+use send::SendMachine::State;
+
 const SUBPACKET_SIZE: usize = 1024 * 8;
 const SUBPACKET_PER_ACK: usize = 10;
 
-#[derive(Eq, PartialEq, Copy, Clone)]
-enum SendPhase {
-    WaitZRInit,
-    SendStart,
-    FileSent,
+microstate!{
+    SendMachine { WaitZRInit }
+    states {
+        WaitZRInit,
+        SendStart,
+        FileSent
+    }
+
+    start_send {
+        WaitZRInit => SendStart
+    }
+
+    stop_send {
+        SendStart => FileSent
+    }
 }
 
 /// Sends data (file) by Z-Modem protocol
@@ -20,7 +32,8 @@ pub fn send<RW, R>(rw: RW, r: &mut R, filename: &str, filesize: Option<u32>) -> 
           R:  Read + Seek {
 
     let mut rw_log = rwlog::ReadWriteLog::new(rw);
-    let mut phase = SendPhase::WaitZRInit;
+
+    let mut machine = SendMachine::new();
 
     let mut data = [0; SUBPACKET_SIZE];
     let mut offset: u32;
@@ -28,24 +41,28 @@ pub fn send<RW, R>(rw: RW, r: &mut R, filename: &str, filesize: Option<u32>) -> 
     //write_zrqinit(&mut rw_log)?;
 
     loop {
+        debug!("SMachine state: {:?}", machine.state());
+
         rw_log.flush()?;
+
         if !find_zpad(&mut rw_log)? {
             continue;
         }
 
         let frame = match parse_header(&mut rw_log)? {
             Some(x) => x,
-            None    => { send_error(&mut rw_log, phase)?; continue },
+            None    => { send_error(&mut rw_log, machine.state())?; continue },
         };
 
         match frame.get_frame_type() {
             ZRINIT => {
-                match phase {
-                    SendPhase::WaitZRInit => {
-                        write_zfile(&mut rw_log, filename, filesize)?;
-                        phase = SendPhase::SendStart;
+                match machine.state() {
+                    State::WaitZRInit => {
+                        if machine.start_send().is_some() {
+                            write_zfile(&mut rw_log, filename, filesize)?;
+                        }
                     },
-                    SendPhase::FileSent => {
+                    State::FileSent => {
                         // ZHEX|ZFIN
                         write_zfin(&mut rw_log)?;
                     },
@@ -64,8 +81,9 @@ pub fn send<RW, R>(rw: RW, r: &mut R, filename: &str, filesize: Option<u32>) -> 
                 let num = r.read(&mut data)?;
 
                 if num == 0 {
-                    write_zeof(&mut rw_log, offset)?;
-                    phase = SendPhase::FileSent;
+                    if machine.stop_send().is_some() {
+                        write_zeof(&mut rw_log, offset)?;
+                    }
                 }
                 else {
                     // ZBIN32|ZDATA
@@ -95,7 +113,7 @@ pub fn send<RW, R>(rw: RW, r: &mut R, filename: &str, filesize: Option<u32>) -> 
             },
             x    => {
                 error!("unexpected frame: {}", x);
-                send_error(&mut rw_log, phase)?;
+                send_error(&mut rw_log, machine.state())?;
             },
         }
     }
@@ -103,13 +121,13 @@ pub fn send<RW, R>(rw: RW, r: &mut R, filename: &str, filesize: Option<u32>) -> 
     Ok(())
 }
 
-fn send_error<W>(w: &mut W, phase: SendPhase) -> Result<()>
+fn send_error<W>(w: &mut W, state: State) -> Result<()>
     where W: Write {
 
     // TODO: flush input
 
-    match phase {
-        SendPhase::WaitZRInit => write_zrqinit(w),
+    match state {
+        State::WaitZRInit => write_zrqinit(w),
         _ => write_znak(w),
     }
 }
