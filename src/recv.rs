@@ -36,6 +36,7 @@ impl State {
             (State::SendingZRINIT, _)       => State::SendingZRINIT,
 
             (State::ProcessingZFILE, ZDATA) => State::ReceivingData,
+            (State::ProcessingZFILE, _)     => State::ProcessingZFILE,
 
             (State::ReceivingData, ZDATA)   => State::ReceivingData,
             (State::ReceivingData, ZEOF)    => State::CheckingData,
@@ -43,8 +44,8 @@ impl State {
             (State::CheckingData, ZDATA)    => State::ReceivingData,
             (State::CheckingData, ZFIN)     => State::Done,
 
-            (s, f) => {
-               error!("Unexpected (state, frame) combination: {:#?} {:#?}", s, f);
+            (s, _) => {
+               error!("Unexpected (state, frame) combination: {:#?} {}", s, frame);
                s // don't change current state
             },
         }

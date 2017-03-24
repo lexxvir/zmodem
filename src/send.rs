@@ -19,6 +19,9 @@ enum State {
     /// Sending ZFILE frame
     SendingZFILE,
 
+    /// Do nothing, just waiting for ZPOS
+    WaitingZPOS,
+
     /// Sending ZDATA & subpackets
     SendingData,
 
@@ -42,6 +45,9 @@ impl State {
             (State::SendingZRQINIT, ZRINIT) => State::SendingZFILE,
 
             (State::SendingZFILE, ZRPOS)    => State::SendingData,
+            (State::SendingZFILE, ZRINIT)   => State::WaitingZPOS,
+
+            (State::WaitingZPOS, ZRPOS)     => State::SendingData,
 
             (State::SendingData,  ZACK)     => State::SendingData,
             (State::SendingData,  ZRPOS)    => State::SendingData,
@@ -49,8 +55,8 @@ impl State {
 
             (State::SendingZFIN,  ZFIN)     => State::Done,
 
-            (s, f) => {
-               error!("Unexpected (state, frame) combination: {:#?} {:#?}", s, f);
+            (s, _) => {
+               error!("Unexpected (state, frame) combination: {:#?} {}", s, frame);
                s // don't change current state
             },
         }
@@ -66,8 +72,7 @@ pub fn send<RW, R>(rw: RW, r: &mut R, filename: &str, filesize: Option<u32>) -> 
     let mut data = [0; SUBPACKET_SIZE];
     let mut offset: u32;
 
-    // TODO: decide does it need?
-    // write_zrqinit(&mut rw_log)?;
+    write_zrqinit(&mut rw_log)?;
 
     let mut state = State::new();
 
