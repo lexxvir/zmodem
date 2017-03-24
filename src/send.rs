@@ -3,46 +3,75 @@ use std::io::{Read, Write, Result, Seek, SeekFrom};
 use consts::*;
 use proto::*;
 use rwlog;
-
-use send::SendMachine::State;
+use frame::*;
 
 const SUBPACKET_SIZE: usize = 1024 * 8;
 const SUBPACKET_PER_ACK: usize = 10;
 
-microstate!{
-    SendMachine { WaitingInit }
-    states {
-        WaitingInit,
-        SendingFile,
-        WaitingFin
+#[derive(Debug, PartialEq)]
+enum State {
+    /// Waiting ZRINIT invite (do nothing)
+    WaitingInit,
+
+    /// Sending ZRQINIT
+    SendingZRQINIT,
+
+    /// Sending ZFILE frame
+    SendingZFILE,
+
+    /// Sending ZDATA & subpackets
+    SendingData,
+
+    /// Sending ZFIN
+    SendingZFIN,
+
+    /// All works done, exiting
+    Done,
+}
+
+impl State {
+    fn new() -> State {
+        State::WaitingInit
     }
 
-    start_send {
-        WaitingInit => SendingFile
-    }
+    fn next(self, frame: &Frame) -> State {
+        match (self, frame.get_frame_type()) {
+            (State::WaitingInit,  ZRINIT)   => State::SendingZFILE,
+            (State::WaitingInit,  _)        => State::SendingZRQINIT,
 
-    stop_send {
-        SendingFile => WaitingFin
+            (State::SendingZRQINIT, ZRINIT) => State::SendingZFILE,
+
+            (State::SendingZFILE, ZRPOS)    => State::SendingData,
+
+            (State::SendingData,  ZACK)     => State::SendingData,
+            (State::SendingData,  ZRPOS)    => State::SendingData,
+            (State::SendingData,  ZRINIT)   => State::SendingZFIN,
+
+            (State::SendingZFIN,  ZFIN)     => State::Done,
+
+            (s, f) => {
+               error!("Unexpected (state, frame) combination: {:#?} {:#?}", s, f);
+               s // don't change current state
+            },
+        }
     }
 }
 
-/// Sends data (file) by Z-Modem protocol
 pub fn send<RW, R>(rw: RW, r: &mut R, filename: &str, filesize: Option<u32>) -> Result<()> 
     where RW: Read + Write,
-          R:  Read + Seek {
+          R:  Read + Seek
+{
+    let mut state = State::new();
 
     let mut rw_log = rwlog::ReadWriteLog::new(rw);
-
-    let mut machine = SendMachine::new();
 
     let mut data = [0; SUBPACKET_SIZE];
     let mut offset: u32;
 
-    //write_zrqinit(&mut rw_log)?;
+    // TODO: decide does it need?
+    // write_zrqinit(&mut rw_log)?;
 
-    loop {
-        debug!("SMachine state: {:?}", machine.state());
-
+    while state != State::Done {
         rw_log.flush()?;
 
         if !find_zpad(&mut rw_log)? {
@@ -51,42 +80,35 @@ pub fn send<RW, R>(rw: RW, r: &mut R, filename: &str, filesize: Option<u32>) -> 
 
         let frame = match parse_header(&mut rw_log)? {
             Some(x) => x,
-            None    => { send_error(&mut rw_log, machine.state())?; continue },
+            None    => { write_znak(&mut rw_log)?; continue },
         };
 
-        match frame.get_frame_type() {
-            ZRINIT => {
-                match machine.state() {
-                    State::WaitingInit => {
-                        if machine.start_send().is_some() {
-                            write_zfile(&mut rw_log, filename, filesize)?;
-                        }
-                    },
-                    State::WaitingFin => {
-                        // ZHEX|ZFIN
-                        write_zfin(&mut rw_log)?;
-                    },
+        state = state.next(&frame);
+        debug!("State: {:?}", state);
 
-                    _ => (),
-                }
+        // do things according new state
+        match state {
+            State::SendingZRQINIT => {
+                write_zrqinit(&mut rw_log)?;
             },
-            // ZCRCG - best perf
-            // ZCRCQ - mid perf
-            // ZCRCW - worst perf
-            // ZCRCE - send at end
-            ZRPOS | ZACK => {
+            State::SendingZFILE => {
+                write_zfile(&mut rw_log, filename, filesize)?;
+            },
+            State::SendingData  => {
                 offset = frame.get_count();
                 r.seek(SeekFrom::Start(offset as u64))?;
 
                 let num = r.read(&mut data)?;
 
                 if num == 0 {
-                    if machine.stop_send().is_some() {
-                        write_zeof(&mut rw_log, offset)?;
-                    }
+                    write_zeof(&mut rw_log, offset)?;
                 }
                 else {
                     // ZBIN32|ZDATA
+                    // ZCRCG - best perf
+                    // ZCRCQ - mid perf
+                    // ZCRCW - worst perf
+                    // ZCRCE - send at end
                     write_zdata(&mut rw_log, offset)?;
 
                     let mut i = 0;
@@ -104,30 +126,16 @@ pub fn send<RW, R>(rw: RW, r: &mut R, filename: &str, filesize: Option<u32>) -> 
                     }
                 }
             },
-            ZFIN => {
-                // write OO (Over & Out)
-                rw_log.write_all("OO".as_bytes())?;
-
-                // finish loop
-                break;
+            State::SendingZFIN  => {
+                write_zfin(&mut rw_log)?;
             },
-            x    => {
-                error!("unexpected frame: {}", x);
-                send_error(&mut rw_log, machine.state())?;
+            State::Done         => {
+                write_over_and_out(&mut rw_log)?;
             },
+            _ => (),
         }
     }
 
     Ok(())
 }
 
-fn send_error<W>(w: &mut W, state: State) -> Result<()>
-    where W: Write {
-
-    // TODO: flush input
-
-    match state {
-        State::WaitingInit => write_zrqinit(w),
-        _ => write_znak(w),
-    }
-}

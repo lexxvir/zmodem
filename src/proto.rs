@@ -316,6 +316,14 @@ fn write_escape<W>(w: &mut W, data: &[u8]) -> io::Result<()>
     w.write_all(&esc_data)
 }
 
+/// Writes "Over & Out"
+pub fn write_over_and_out<W>(w: &mut W) -> io::Result<()>
+    where W: io::Write
+{
+    w.write_all("OO".as_bytes())
+}
+
+
 pub fn escape_buf(src: &[u8], dst: &mut Vec<u8>) {
     for x in src {
         match *x {
