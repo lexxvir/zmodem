@@ -10,19 +10,19 @@ const SUBPACKET_SIZE: usize = 1024 * 8;
 const SUBPACKET_PER_ACK: usize = 10;
 
 microstate!{
-    SendMachine { WaitZRInit }
+    SendMachine { WaitingInit }
     states {
-        WaitZRInit,
-        SendStart,
-        FileSent
+        WaitingInit,
+        SendingFile,
+        WaitingFin
     }
 
     start_send {
-        WaitZRInit => SendStart
+        WaitingInit => SendingFile
     }
 
     stop_send {
-        SendStart => FileSent
+        SendingFile => WaitingFin
     }
 }
 
@@ -57,12 +57,12 @@ pub fn send<RW, R>(rw: RW, r: &mut R, filename: &str, filesize: Option<u32>) -> 
         match frame.get_frame_type() {
             ZRINIT => {
                 match machine.state() {
-                    State::WaitZRInit => {
+                    State::WaitingInit => {
                         if machine.start_send().is_some() {
                             write_zfile(&mut rw_log, filename, filesize)?;
                         }
                     },
-                    State::FileSent => {
+                    State::WaitingFin => {
                         // ZHEX|ZFIN
                         write_zfin(&mut rw_log)?;
                     },
@@ -127,7 +127,7 @@ fn send_error<W>(w: &mut W, state: State) -> Result<()>
     // TODO: flush input
 
     match state {
-        State::WaitZRInit => write_zrqinit(w),
+        State::WaitingInit => write_zrqinit(w),
         _ => write_znak(w),
     }
 }
