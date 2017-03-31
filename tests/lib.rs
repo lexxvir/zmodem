@@ -43,6 +43,7 @@ lazy_static! {
     static ref RND_VALUES: Vec<u8> = {
         use rand::Rng;
         let mut rng = rand::thread_rng();
+        //let mut buf = vec![0; 1024 * 8 * 50 + 100];
         let mut buf = vec![0; 1024 * 1024 * 11];
         rng.fill_bytes(&mut buf);
         buf
@@ -80,6 +81,9 @@ fn recv_from_sz() {
 #[test]
 #[cfg(unix)]
 fn send_to_rz() {
+    use std::os::unix::io::IntoRawFd;
+    use std::os::unix::io::FromRawFd;
+
     LOG_INIT.is_ok();
 
     let _ = remove_file("send_to_rz");
@@ -87,12 +91,16 @@ fn send_to_rz() {
     let sz = Command::new("rz")
             .stdout(Stdio::piped())
             .stdin(Stdio::piped())
+            .stderr(Stdio::null())
             .spawn()
             .expect("rz failed to run");
 
-    let child_stdin = sz.stdin.unwrap();
-    let child_stdout = sz.stdout.unwrap();
-    let mut inout = InOut::new(child_stdout, child_stdin);
+    let child_stdin = sz.stdin.unwrap().into_raw_fd();
+    let child_stdout = sz.stdout.unwrap().into_raw_fd();
+    //let mut inout = InOut::new(child_stdout, child_stdin);
+
+    let mut read = unsafe { File::from_raw_fd(child_stdout) };
+    let mut write = unsafe { File::from_raw_fd(child_stdin) };
 
     let len = RND_VALUES.len() as u32;
     let copy = RND_VALUES.clone();
@@ -100,7 +108,7 @@ fn send_to_rz() {
 
     sleep(Duration::from_millis(300));
 
-    zmodem::send::send(&mut inout, &mut cur, "send_to_rz", Some(len)).unwrap();
+    zmodem::send::send2(&mut read, &mut write, &mut cur, "send_to_rz", Some(len));
 
     sleep(Duration::from_millis(300));
 
@@ -135,14 +143,14 @@ fn lib_send_recv() {
     sleep(Duration::from_millis(300));
 
     spawn(move || {
-        let outf = OpenOptions::new().write(true).open("test-fifo1").unwrap();
-        let inf = File::open("test-fifo2").unwrap();
-        let mut inout = InOut::new(inf, outf);
+        let mut outf = OpenOptions::new().write(true).open("test-fifo1").unwrap();
+        let mut inf = File::open("test-fifo2").unwrap();
+        //let mut inout = InOut::new(inf, outf);
 
         let origin = RND_VALUES.clone();
         let mut c = Cursor::new(&origin);
 
-        zmodem::send::send(&mut inout, &mut c, "test", None).unwrap();
+        zmodem::send::send2(&mut inf, &mut outf, &mut c, "test", None);
     });
 
     let mut c = Cursor::new(Vec::new());

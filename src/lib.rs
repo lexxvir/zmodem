@@ -4,6 +4,7 @@ extern crate log;
 extern crate crc as crc32;
 extern crate hex;
 extern crate hexdump;
+extern crate mio;
 
 mod consts;
 mod frame;

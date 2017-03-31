@@ -1,4 +1,9 @@
 use std::io::{Read, Write, Result, Seek, SeekFrom};
+use std::fs::File;
+use std::os::unix::io::AsRawFd;
+
+use mio::*;
+use mio::unix::{EventedFd};
 
 use consts::*;
 use proto::*;
@@ -24,6 +29,8 @@ enum State {
 
     /// Sending ZDATA & subpackets
     SendingData,
+
+    SendingZCRCG(usize),
 
     /// Sending ZFIN
     SendingZFIN,
@@ -142,5 +149,130 @@ pub fn send<RW, R>(rw: RW, r: &mut R, filename: &str, filesize: Option<u32>) -> 
     }
 
     Ok(())
+}
+
+const READ: Token = Token(0);
+const WRITE: Token = Token(1);
+
+pub fn send2<R>(mut read: &mut File, mut write: &mut File, r: &mut R, filename: &str, filesize: Option<u32>) //-> Result<()> 
+    where R: Read + Seek
+{
+    let rfd = read.as_raw_fd();
+    let rfd = EventedFd( &rfd );
+
+    let wfd = write.as_raw_fd();
+    let wfd = EventedFd( &wfd );
+
+    let poll = Poll::new().unwrap();
+    poll.register(&rfd, READ, Ready::readable(), PollOpt::level()).unwrap();
+
+    let mut state = State::new();
+    let mut wrbuf = Vec::new();
+
+    let mut data = [0; SUBPACKET_SIZE];
+    let mut offset: u32 = 0;
+    let mut num = 0;
+
+    let mut events = Events::with_capacity(1024);
+
+    while state != State::Done {
+        poll.poll(&mut events, None).unwrap();
+
+        for event in events.iter() {
+            if event.readiness().is_readable() {
+                debug!("read");
+
+                if let Some(frame) = get_frame(read).unwrap() {
+                    state = state.next(&frame);
+                    debug!("State: {:?}", state);
+
+                    // do things according new state
+                    match state {
+                        State::SendingZRQINIT => {
+                            write_zrqinit(&mut wrbuf).unwrap();
+                        },
+                        State::SendingZFILE => {
+                            write_zfile(&mut wrbuf, filename, filesize).unwrap();
+                        },
+                        State::SendingZFIN  => {
+                            write_zfin(&mut wrbuf).unwrap();
+                        },
+                        State::Done         => {
+                            write_over_and_out(&mut wrbuf).unwrap();
+                        },
+                        State::SendingData  => {
+                            offset = frame.get_count();
+                            r.seek(SeekFrom::Start(offset as u64)).unwrap();
+
+                            num = r.read(&mut data).unwrap();
+
+                            if num == 0 {
+                                write_zeof(&mut wrbuf, offset).unwrap();
+                            }
+                            else {
+                                // ZBIN32|ZDATA
+                                // ZCRCG - best perf
+                                // ZCRCQ - mid perf
+                                // ZCRCW - worst perf
+                                // ZCRCE - send at end
+                                write_zdata(&mut wrbuf, offset).unwrap();
+                                state = State::SendingZCRCG(0);
+                            }
+                        },
+                        _ => (),
+                    }
+                }
+                else {
+                    //write_znak(&mut wrbuf).unwrap();
+                }
+
+                let _ = poll.register(&wfd, WRITE, Ready::writable(), PollOpt::edge());
+            }
+
+            if event.readiness().is_writable() {
+                debug!("write");
+                if !wrbuf.is_empty() {
+                    write.write_all(&wrbuf).unwrap();
+                    wrbuf.clear();
+                }
+
+                if let State::SendingZCRCG(i) = state {
+                    if num < data.len() /*|| i >= SUBPACKET_PER_ACK*/ {
+                        write_zlde_data(&mut wrbuf, ZCRCW, &data[..num]).unwrap();
+                        offset += num as u32;
+
+                        write.write_all(&wrbuf).unwrap();
+                        wrbuf.clear();
+
+                        state = State::SendingData;
+                        poll.deregister(&wfd).unwrap();
+                    }
+                    else {
+                        write_zlde_data(&mut wrbuf, ZCRCG, &data[..num]).unwrap();
+                        offset += num as u32;
+
+                        write.write_all(&wrbuf).unwrap();
+                        wrbuf.clear();
+
+                        state = State::SendingZCRCG(i + 1);
+                        num = r.read(&mut data).unwrap();
+                    }
+                }
+                else {
+                    poll.deregister(&wfd).unwrap();
+                }
+            }
+        }
+    }
+
+    //Result::Ok(())
+}
+
+fn get_frame<R: Read>(read: &mut R) -> Result<Option<Frame>> {
+    if !find_zpad(read)? {
+        return Ok(None);
+    }
+
+    parse_header(read)
 }
 
