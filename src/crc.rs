@@ -76,7 +76,7 @@ pub fn get_crc16(buf: &[u8], zcrc: Option<u8>) -> [u8; 2] {
 pub fn get_crc32(buf: &[u8], zcrc: Option<u8>) -> [u8; 4] {
     let mut crc = crc32::checksum_ieee(buf);
     if let Some(x) = zcrc {
-        crc = update(crc, &*IEEE_TABLE, &[x]);
+        crc = update(crc, &IEEE_TABLE, &[x]);
     }
 
     [
