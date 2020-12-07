@@ -52,7 +52,7 @@ lazy_static! {
 #[test]
 #[cfg(unix)]
 fn recv_from_sz() {
-    LOG_INIT.is_ok();
+    let _ = LOG_INIT.is_ok();
 
     let mut f = File::create("recv_from_sz").unwrap();
     f.write_all(&RND_VALUES).unwrap();
@@ -80,7 +80,7 @@ fn recv_from_sz() {
 #[test]
 #[cfg(unix)]
 fn send_to_rz() {
-    LOG_INIT.is_ok();
+    let _ = LOG_INIT.is_ok();
 
     let _ = remove_file("send_to_rz");
 
@@ -115,7 +115,7 @@ fn send_to_rz() {
 #[test]
 #[cfg(unix)]
 fn lib_send_recv() {
-    LOG_INIT.is_ok();
+    let _ = LOG_INIT;
 
     let _ = remove_file("test-fifo1");
     let _ = remove_file("test-fifo2");

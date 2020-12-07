@@ -141,11 +141,11 @@ impl fmt::Display for Frame {
 fn test_frame() {
     assert_eq!(
         Frame::new(ZBIN, 0).build(),
-        vec![ZPAD, ZLDE, ZBIN, 0, 0, 0, 0, 0, 0, 0]);;
+        vec![ZPAD, ZLDE, ZBIN, 0, 0, 0, 0, 0, 0, 0]);
 
     assert_eq!(
         Frame::new(ZBIN32, 0).build(),
-        vec![ZPAD, ZLDE, ZBIN32, 0, 0, 0, 0, 0, 29, 247, 34, 198]);;
+        vec![ZPAD, ZLDE, ZBIN32, 0, 0, 0, 0, 0, 29, 247, 34, 198]);
 
     assert_eq!(
         Frame::new(ZBIN, 0)

@@ -12,5 +12,5 @@ hexdump = "0.1.0"
 log = "0.3.7"
 
 [dev-dependencies]
-lazy_static = "0.2.4"
+lazy_static = "1"
 rand = "0.3.15"
