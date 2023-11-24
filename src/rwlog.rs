@@ -1,9 +1,9 @@
-use std::io::*;
-use log::LogLevel::*;
 use hexdump::*;
+use log::LogLevel::*;
+use std::io::*;
 
 pub struct ReadWriteLog<RW> {
-    inner: BufReader<RW>, 
+    inner: BufReader<RW>,
 }
 
 impl<RW: Read + Write> ReadWriteLog<RW> {
@@ -64,4 +64,3 @@ impl<RW: Write + Read> Write for ReadWriteLog<RW> {
         self.inner.get_mut().flush()
     }
 }
-

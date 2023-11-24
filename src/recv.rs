@@ -1,11 +1,11 @@
-use std::{thread, time};
-use std::io::{Read, Write, Result};
+use std::io::{Read, Result, Write};
 use std::str::from_utf8;
+use std::{thread, time};
 
 use consts::*;
+use frame::*;
 use proto::*;
 use rwlog;
-use frame::*;
 
 #[derive(Debug, PartialEq)]
 enum State {
@@ -32,30 +32,31 @@ impl State {
 
     fn next(self, frame: &Frame) -> State {
         match (self, frame.get_frame_type()) {
-            (State::SendingZRINIT, ZFILE)   => State::ProcessingZFILE,
-            (State::SendingZRINIT, _)       => State::SendingZRINIT,
+            (State::SendingZRINIT, ZFILE) => State::ProcessingZFILE,
+            (State::SendingZRINIT, _) => State::SendingZRINIT,
 
             (State::ProcessingZFILE, ZDATA) => State::ReceivingData,
-            (State::ProcessingZFILE, _)     => State::ProcessingZFILE,
+            (State::ProcessingZFILE, _) => State::ProcessingZFILE,
 
-            (State::ReceivingData, ZDATA)   => State::ReceivingData,
-            (State::ReceivingData, ZEOF)    => State::CheckingData,
+            (State::ReceivingData, ZDATA) => State::ReceivingData,
+            (State::ReceivingData, ZEOF) => State::CheckingData,
 
-            (State::CheckingData, ZDATA)    => State::ReceivingData,
-            (State::CheckingData, ZFIN)     => State::Done,
+            (State::CheckingData, ZDATA) => State::ReceivingData,
+            (State::CheckingData, ZFIN) => State::Done,
 
             (s, _) => {
-               error!("Unexpected (state, frame) combination: {:#?} {}", s, frame);
-               s // don't change current state
-            },
+                error!("Unexpected (state, frame) combination: {:#?} {}", s, frame);
+                s // don't change current state
+            }
         }
     }
 }
 
 /// Receives data by Z-Modem protocol
-pub fn recv<RW, W>(rw: RW, mut w: W) -> Result<usize> 
-    where RW: Read + Write,
-          W:  Write
+pub fn recv<RW, W>(rw: RW, mut w: W) -> Result<usize>
+where
+    RW: Read + Write,
+    W: Write,
 {
     let mut rw_log = rwlog::ReadWriteLog::new(rw);
     let mut count = 0;
@@ -71,7 +72,10 @@ pub fn recv<RW, W>(rw: RW, mut w: W) -> Result<usize>
 
         let frame = match parse_header(&mut rw_log)? {
             Some(x) => x,
-            None    => { recv_error(&mut rw_log, &state, count)?; continue },
+            None => {
+                recv_error(&mut rw_log, &state, count)?;
+                continue;
+            }
         };
 
         state = state.next(&frame);
@@ -81,14 +85,13 @@ pub fn recv<RW, W>(rw: RW, mut w: W) -> Result<usize>
         match state {
             State::SendingZRINIT => {
                 write_zrinit(&mut rw_log)?;
-            },
+            }
             State::ProcessingZFILE => {
                 let mut buf = Vec::new();
 
                 if recv_zlde_frame(frame.get_header(), &mut rw_log, &mut buf)?.is_none() {
                     write_znak(&mut rw_log)?;
-                }
-                else {
+                } else {
                     write_zrpos(&mut rw_log, count)?;
 
                     // TODO: process supplied data
@@ -96,26 +99,30 @@ pub fn recv<RW, W>(rw: RW, mut w: W) -> Result<usize>
                         debug!(target: "proto", "ZFILE supplied data: {}", s);
                     }
                 }
-            },
+            }
             State::ReceivingData => {
-                if frame.get_count() != count ||
-                    !recv_data(frame.get_header(), &mut count, &mut rw_log, &mut w)? {
+                if frame.get_count() != count
+                    || !recv_data(frame.get_header(), &mut count, &mut rw_log, &mut w)?
+                {
                     write_zrpos(&mut rw_log, count)?;
                 }
-            },
+            }
             State::CheckingData => {
                 if frame.get_count() != count {
-                    error!("ZEOF offset mismatch: frame({}) != recv({})", frame.get_count(), count);
+                    error!(
+                        "ZEOF offset mismatch: frame({}) != recv({})",
+                        frame.get_count(),
+                        count
+                    );
                     // receiver ignores the ZEOF because a new zdata is coming
-                }
-                else {
+                } else {
                     write_zrinit(&mut rw_log)?;
                 }
-            },
+            }
             State::Done => {
                 write_zfin(&mut rw_log)?;
                 thread::sleep(time::Duration::from_millis(10)); // sleep a bit
-            },
+            }
         }
     }
 
@@ -123,13 +130,13 @@ pub fn recv<RW, W>(rw: RW, mut w: W) -> Result<usize>
 }
 
 fn recv_error<W>(w: &mut W, state: &State, count: u32) -> Result<()>
-    where W: Write
+where
+    W: Write,
 {
     // TODO: flush input
 
     match *state {
         State::ReceivingData => write_zrpos(w, count),
-        _                    => write_znak(w),
+        _ => write_znak(w),
     }
 }
-

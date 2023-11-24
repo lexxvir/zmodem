@@ -1,14 +1,14 @@
 use std::io::*;
 
 pub struct CombinedStdInOut {
-    stdin:  Stdin,
+    stdin: Stdin,
     stdout: Stdout,
 }
 
 impl CombinedStdInOut {
     pub fn new() -> CombinedStdInOut {
         CombinedStdInOut {
-            stdin:  stdin(),
+            stdin: stdin(),
             stdout: stdout(),
         }
     }

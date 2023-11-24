@@ -6,8 +6,8 @@ extern crate hex;
 extern crate hexdump;
 
 mod consts;
-mod frame;
 mod crc;
+mod frame;
 mod proto;
 mod rwlog;
 

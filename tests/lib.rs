@@ -1,15 +1,16 @@
-extern crate zmodem;
-extern crate log;
 extern crate env_logger;
-#[macro_use] extern crate lazy_static;
+extern crate log;
+extern crate zmodem;
+#[macro_use]
+extern crate lazy_static;
 extern crate rand;
 
-use std::process::*;
-use std::fs::{File, remove_file, OpenOptions};
+use std::fs::{remove_file, File, OpenOptions};
 use std::io::*;
-use std::time::*;
-use std::thread::{sleep, spawn};
+use std::process::*;
 use std::result;
+use std::thread::{sleep, spawn};
+use std::time::*;
 
 struct InOut<R: Read, W: Write> {
     r: R,
@@ -58,11 +59,11 @@ fn recv_from_sz() {
     f.write_all(&RND_VALUES).unwrap();
 
     let sz = Command::new("sz")
-            .arg("recv_from_sz")
-            .stdout(Stdio::piped())
-            .stdin(Stdio::piped())
-            .spawn()
-            .expect("sz failed to run");
+        .arg("recv_from_sz")
+        .stdout(Stdio::piped())
+        .stdin(Stdio::piped())
+        .spawn()
+        .expect("sz failed to run");
 
     let child_stdin = sz.stdin.unwrap();
     let child_stdout = sz.stdout.unwrap();
@@ -85,10 +86,10 @@ fn send_to_rz() {
     let _ = remove_file("send_to_rz");
 
     let sz = Command::new("rz")
-            .stdout(Stdio::piped())
-            .stdin(Stdio::piped())
-            .spawn()
-            .expect("rz failed to run");
+        .stdout(Stdio::piped())
+        .stdin(Stdio::piped())
+        .spawn()
+        .expect("rz failed to run");
 
     let child_stdin = sz.stdin.unwrap();
     let child_stdout = sz.stdout.unwrap();
@@ -121,16 +122,16 @@ fn lib_send_recv() {
     let _ = remove_file("test-fifo2");
 
     let _ = Command::new("mkfifo")
-            .arg("test-fifo1")
-            .spawn()
-            .expect("mkfifo failed to run")
-            .wait();
+        .arg("test-fifo1")
+        .spawn()
+        .expect("mkfifo failed to run")
+        .wait();
 
     let _ = Command::new("mkfifo")
-            .arg("test-fifo2")
-            .spawn()
-            .expect("mkfifo failed to run")
-            .wait();
+        .arg("test-fifo2")
+        .spawn()
+        .expect("mkfifo failed to run")
+        .wait();
 
     sleep(Duration::from_millis(300));
 

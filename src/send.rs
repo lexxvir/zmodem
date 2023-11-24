@@ -1,9 +1,9 @@
-use std::io::{Read, Write, Result, Seek, SeekFrom};
+use std::io::{Read, Result, Seek, SeekFrom, Write};
 
 use consts::*;
+use frame::*;
 use proto::*;
 use rwlog;
-use frame::*;
 
 const SUBPACKET_SIZE: usize = 1024 * 8;
 const SUBPACKET_PER_ACK: usize = 10;
@@ -39,33 +39,34 @@ impl State {
 
     fn next(self, frame: &Frame) -> State {
         match (self, frame.get_frame_type()) {
-            (State::WaitingInit,  ZRINIT)   => State::SendingZFILE,
-            (State::WaitingInit,  _)        => State::SendingZRQINIT,
+            (State::WaitingInit, ZRINIT) => State::SendingZFILE,
+            (State::WaitingInit, _) => State::SendingZRQINIT,
 
             (State::SendingZRQINIT, ZRINIT) => State::SendingZFILE,
 
-            (State::SendingZFILE, ZRPOS)    => State::SendingData,
-            (State::SendingZFILE, ZRINIT)   => State::WaitingZPOS,
+            (State::SendingZFILE, ZRPOS) => State::SendingData,
+            (State::SendingZFILE, ZRINIT) => State::WaitingZPOS,
 
-            (State::WaitingZPOS, ZRPOS)     => State::SendingData,
+            (State::WaitingZPOS, ZRPOS) => State::SendingData,
 
-            (State::SendingData,  ZACK)     => State::SendingData,
-            (State::SendingData,  ZRPOS)    => State::SendingData,
-            (State::SendingData,  ZRINIT)   => State::SendingZFIN,
+            (State::SendingData, ZACK) => State::SendingData,
+            (State::SendingData, ZRPOS) => State::SendingData,
+            (State::SendingData, ZRINIT) => State::SendingZFIN,
 
-            (State::SendingZFIN,  ZFIN)     => State::Done,
+            (State::SendingZFIN, ZFIN) => State::Done,
 
             (s, _) => {
-               error!("Unexpected (state, frame) combination: {:#?} {}", s, frame);
-               s // don't change current state
-            },
+                error!("Unexpected (state, frame) combination: {:#?} {}", s, frame);
+                s // don't change current state
+            }
         }
     }
 }
 
-pub fn send<RW, R>(rw: RW, r: &mut R, filename: &str, filesize: Option<u32>) -> Result<()> 
-    where RW: Read + Write,
-          R:  Read + Seek
+pub fn send<RW, R>(rw: RW, r: &mut R, filename: &str, filesize: Option<u32>) -> Result<()>
+where
+    RW: Read + Write,
+    R: Read + Seek,
 {
     let mut rw_log = rwlog::ReadWriteLog::new(rw);
 
@@ -85,7 +86,10 @@ pub fn send<RW, R>(rw: RW, r: &mut R, filename: &str, filesize: Option<u32>) -> 
 
         let frame = match parse_header(&mut rw_log)? {
             Some(x) => x,
-            None    => { write_znak(&mut rw_log)?; continue },
+            None => {
+                write_znak(&mut rw_log)?;
+                continue;
+            }
         };
 
         state = state.next(&frame);
@@ -95,11 +99,11 @@ pub fn send<RW, R>(rw: RW, r: &mut R, filename: &str, filesize: Option<u32>) -> 
         match state {
             State::SendingZRQINIT => {
                 write_zrqinit(&mut rw_log)?;
-            },
+            }
             State::SendingZFILE => {
                 write_zfile(&mut rw_log, filename, filesize)?;
-            },
-            State::SendingData  => {
+            }
+            State::SendingData => {
                 offset = frame.get_count();
                 r.seek(SeekFrom::Start(offset as u64))?;
 
@@ -107,8 +111,7 @@ pub fn send<RW, R>(rw: RW, r: &mut R, filename: &str, filesize: Option<u32>) -> 
 
                 if num == 0 {
                     write_zeof(&mut rw_log, offset)?;
-                }
-                else {
+                } else {
                     // ZBIN32|ZDATA
                     // ZCRCG - best perf
                     // ZCRCQ - mid perf
@@ -130,17 +133,16 @@ pub fn send<RW, R>(rw: RW, r: &mut R, filename: &str, filesize: Option<u32>) -> 
                         }
                     }
                 }
-            },
-            State::SendingZFIN  => {
+            }
+            State::SendingZFIN => {
                 write_zfin(&mut rw_log)?;
-            },
-            State::Done         => {
+            }
+            State::Done => {
                 write_over_and_out(&mut rw_log)?;
-            },
+            }
             _ => (),
         }
     }
 
     Ok(())
 }
-
