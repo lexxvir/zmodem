@@ -324,7 +324,12 @@ where
         );
     }
 
-    let crc = get_crc32(data, Some(zcrc_byte));
+    let mut digest = CRC32.digest();
+    digest.update(data);
+    digest.update(&[zcrc_byte]);
+    // Assuming little-endian byte order, given that ZMODEM used to work on
+    // VAX, which was a little-endian computer architecture:
+    let crc = digest.finalize().to_le_bytes();
 
     write_escape(w, data)?;
     w.write_all(&[ZLDE, zcrc_byte])?;
