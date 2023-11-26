@@ -1,4 +1,3 @@
 target/
 **/*.rs.bk
-Cargo.lock
 *.sw[po]
