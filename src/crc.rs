@@ -1,6 +1,6 @@
-use crc32::crc32;
-use crc32::crc32::update;
-use crc32::crc32::IEEE_TABLE;
+use crc32::{Crc, CRC_32_ISO_HDLC};
+
+const CRC32: Crc<u32> = Crc::<u32>::new(&CRC_32_ISO_HDLC);
 
 /* crctab calculated by Mark G. Mendel, Network Systems Corporation */
 static CRCTAB: [u16; 256] = [
@@ -60,12 +60,16 @@ pub fn get_crc16(buf: &[u8], zcrc: Option<u8>) -> [u8; 2] {
     [(crc >> 8) as u8, (crc & 0xff) as u8]
 }
 
-pub fn get_crc32(buf: &[u8], zcrc: Option<u8>) -> [u8; 4] {
-    let mut crc = crc32::checksum_ieee(buf);
-    if let Some(x) = zcrc {
-        crc = update(crc, &IEEE_TABLE, &[x]);
+pub fn get_crc32(buf: &[u8], maybe_zcrc: Option<u8>) -> [u8; 4] {
+    let mut digest = CRC32.digest();
+
+    digest.update(buf);
+
+    if let Some(zcrc) = maybe_zcrc {
+        digest.update(&[zcrc]);
     }
 
+    let crc = digest.finalize();
     [
         (crc & 0xff) as u8,
         (crc >> 8) as u8,
