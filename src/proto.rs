@@ -66,8 +66,8 @@ where
 
     let crc1 = v[5..].to_vec();
     let crc2 = match header {
-        ZBIN32 => get_crc32(&v[..5], None).to_vec(),
-        _ => get_crc16(&v[..5], None).to_vec(),
+        ZBIN32 => CRC32.checksum(&v[..5]).to_le_bytes().to_vec(),
+        _ => CRC16.checksum(&v[..5]).to_be_bytes().to_vec(),
     };
 
     if crc1 != crc2 {
