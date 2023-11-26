@@ -89,7 +89,7 @@ where
             State::ProcessingZFILE => {
                 let mut buf = Vec::new();
 
-                if recv_zlde_frame(frame.get_header(), &mut rw_log, &mut buf)?.is_none() {
+                if recv_zlde_frame(frame.encoding(), &mut rw_log, &mut buf)?.is_none() {
                     write_znak(&mut rw_log)?;
                 } else {
                     write_zrpos(&mut rw_log, count)?;
@@ -102,7 +102,7 @@ where
             }
             State::ReceivingData => {
                 if frame.get_count() != count
-                    || !recv_data(frame.get_header(), &mut count, &mut rw_log, &mut w)?
+                    || !recv_data(frame.encoding(), &mut count, &mut rw_log, &mut w)?
                 {
                     write_zrpos(&mut rw_log, count)?;
                 }

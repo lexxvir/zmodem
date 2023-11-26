@@ -6,15 +6,15 @@ use std::fmt;
 
 #[derive(Debug, Eq, PartialEq)]
 pub struct Frame {
-    header: u8,
+    encoding: u8,
     ftype: u8,
     flags: [u8; 4],
 }
 
 impl Frame {
-    pub fn new(header: u8, ftype: u8) -> Frame {
+    pub fn new(encoding: u8, ftype: u8) -> Frame {
         Frame {
-            header,
+            encoding,
             ftype,
             flags: [0; 4],
         }
@@ -46,24 +46,24 @@ impl Frame {
         let mut out = Vec::new();
 
         out.push(ZPAD);
-        if self.header == ZHEX {
+        if self.encoding == ZHEX {
             out.push(ZPAD);
         }
 
         out.push(ZLDE);
-        out.push(self.header);
+        out.push(self.encoding);
         out.push(self.ftype);
         out.extend_from_slice(&self.flags);
 
         // FIXME: Offsets are defined with magic numbers. Check that the offsets
         // are indeed correct and clarify their purpose.
-        out.append(&mut match self.header {
+        out.append(&mut match self.encoding {
             ZBIN32 => crc::CRC32.checksum(&out[3..]).to_le_bytes().to_vec(),
             ZHEX => crc::CRC16.checksum(&out[4..]).to_be_bytes().to_vec(),
-            _ => crc::CRC16.checksum(&out[3..]).to_be_bytes().to_vec()
+            _ => crc::CRC16.checksum(&out[3..]).to_be_bytes().to_vec(),
         });
 
-        if self.header == ZHEX {
+        if self.encoding == ZHEX {
             let hex = out.drain(4..).collect::<Vec<u8>>().to_hex();
             out.extend_from_slice(hex.as_bytes());
         }
@@ -73,7 +73,7 @@ impl Frame {
         proto::escape_buf(&tmp, &mut tmp2);
         out.extend_from_slice(&tmp2);
 
-        if self.header == ZHEX {
+        if self.encoding == ZHEX {
             out.extend_from_slice(b"\r\n");
 
             if self.ftype != ZACK && self.ftype != ZFIN {
@@ -88,14 +88,14 @@ impl Frame {
         self.ftype
     }
 
-    pub fn get_header(&self) -> u8 {
-        self.header
+    pub fn encoding(&self) -> u8 {
+        self.encoding
     }
 }
 
 impl fmt::Display for Frame {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let hdr = match self.header {
+        let hdr = match self.encoding {
             ZHEX => "ZHEX",
             ZBIN => "ZBIN",
             ZBIN32 => "ZBIN32",
