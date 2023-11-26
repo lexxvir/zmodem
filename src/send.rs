@@ -39,7 +39,7 @@ impl State {
         State::WaitingInit
     }
 
-    fn next(self, frame: &Frame) -> State {
+    fn next(self, frame: &Header) -> State {
         match (self, frame.frame_type()) {
             (State::WaitingInit, Type::ZRINIT) => State::SendingZFILE,
             (State::WaitingInit, _) => State::SendingZRQINIT,

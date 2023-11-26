@@ -35,11 +35,18 @@ where
     Ok(true)
 }
 
-pub fn parse_header<R>(mut r: R) -> io::Result<Option<Frame>>
+pub fn parse_header<R>(mut r: R) -> io::Result<Option<Header>>
 where
     R: io::Read,
 {
-    let encoding = Encoding::try_from(read_byte(&mut r)?)?;
+    // Read encoding byte:
+    let enc_raw = read_byte(&mut r)?;
+
+    // Parse encoding byte:
+    let encoding = match Encoding::try_from(enc_raw) {
+        Ok(enc) => enc,
+        Err(_) => return Ok(None),
+    };
 
     let len = 1 + 4; // frame type + flags
     let len = if encoding == Encoding::ZBIN32 { 4 } else { 2 } + len;
@@ -73,18 +80,25 @@ where
         return Ok(None);
     }
 
+    // Read encoding byte:
     let ft_raw: u8 = v[0];
-    let ft: Type = Type::try_from(ft_raw)?;
-    let mut frame = Frame::new(encoding, ft);
+
+    // Parse encoding byte:
+    let ft = match Type::try_from(ft_raw) {
+        Ok(ft) => ft,
+        Err(_) => return Ok(None),
+    };
+
+    let mut frame = Header::new(encoding, ft);
     frame.flags(&[v[1], v[2], v[3], v[4]]);
 
-    // if log_enabled!(Debug) {
-    //     debug!("Got frame: {}", frame);
-    //     match frame.get_frame_type() {
-    //         ZACK | ZRPOS => debug!("  offset = {}", frame.get_count()),
-    //         _ => (),
-    //     }
-    // }
+    if log_enabled!(Debug) {
+        debug!("Got frame: {}", frame);
+        match frame.frame_type() {
+            Type::ZACK | Type::ZRPOS => debug!("  offset = {}", frame.get_count()),
+            _ => (),
+        }
+    }
 
     Ok(Some(frame))
 }
@@ -146,7 +160,7 @@ where
 }
 
 pub fn recv_data<RW, OUT>(
-    header: u8,
+    enc_raw: u8,
     count: &mut u32,
     rw: &mut RW,
     out: &mut OUT,
@@ -160,7 +174,14 @@ where
     loop {
         buf.clear();
 
-        let zcrc = match recv_zlde_frame(Encoding::try_from(header)?, rw, &mut buf)? {
+        // Parse encoding byte:
+        let encoding = match Encoding::try_from(enc_raw) {
+            Ok(enc) => enc,
+            Err(_) => return Ok(false),
+        };
+
+        // Read and parse ZLDE frame:
+        let zcrc = match recv_zlde_frame(encoding, rw, &mut buf)? {
             Some(x) => x,
             None => return Ok(false),
         };
@@ -227,7 +248,7 @@ where
 {
     debug!("write ZRINIT");
     w.write_all(
-        &Frame::new(Encoding::ZHEX, Type::ZRINIT)
+        &Header::new(Encoding::ZHEX, Type::ZRINIT)
             .flags(&[0, 0, 0, 0x23])
             .build(),
     )
@@ -239,7 +260,7 @@ where
     W: io::Write,
 {
     debug!("write ZRQINIT");
-    w.write_all(&Frame::new(Encoding::ZHEX, Type::ZRQINIT).build())
+    w.write_all(&Header::new(Encoding::ZHEX, Type::ZRQINIT).build())
 }
 
 /// Writes ZFILE frame
@@ -248,7 +269,7 @@ where
     W: io::Write,
 {
     debug!("write ZFILE");
-    w.write_all(&Frame::new(Encoding::ZBIN32, Type::ZFILE).build())?;
+    w.write_all(&Header::new(Encoding::ZBIN32, Type::ZFILE).build())?;
 
     let mut zfile_data = format!("{}\0", filename);
     if let Some(size) = filesize {
@@ -266,7 +287,7 @@ where
     W: io::Write,
 {
     debug!("write ZACK bytes={}", count);
-    w.write_all(&Frame::new(Encoding::ZHEX, Type::ZACK).count(count).build())
+    w.write_all(&Header::new(Encoding::ZHEX, Type::ZACK).count(count).build())
 }
 
 /// Writes ZFIN frame
@@ -275,7 +296,7 @@ where
     W: io::Write,
 {
     debug!("write ZFIN");
-    w.write_all(&Frame::new(Encoding::ZHEX, Type::ZFIN).build())
+    w.write_all(&Header::new(Encoding::ZHEX, Type::ZFIN).build())
 }
 
 /// Writes ZNAK frame
@@ -284,7 +305,7 @@ where
     W: io::Write,
 {
     debug!("write ZNAK");
-    w.write_all(&Frame::new(Encoding::ZHEX, Type::ZNAK).build())
+    w.write_all(&Header::new(Encoding::ZHEX, Type::ZNAK).build())
 }
 
 /// Writes ZRPOS frame
@@ -293,7 +314,11 @@ where
     W: io::Write,
 {
     debug!("write ZRPOS bytes={}", count);
-    w.write_all(&Frame::new(Encoding::ZHEX, Type::ZRPOS).count(count).build())
+    w.write_all(
+        &Header::new(Encoding::ZHEX, Type::ZRPOS)
+            .count(count)
+            .build(),
+    )
 }
 
 /// Writes ZDATA frame
@@ -303,7 +328,7 @@ where
 {
     debug!("write ZDATA offset={}", offset);
     w.write_all(
-        &Frame::new(Encoding::ZBIN32, Type::ZDATA)
+        &Header::new(Encoding::ZBIN32, Type::ZDATA)
             .count(offset)
             .build(),
     )
@@ -316,7 +341,7 @@ where
 {
     debug!("write ZEOF offset={}", offset);
     w.write_all(
-        &Frame::new(Encoding::ZBIN32, Type::ZEOF)
+        &Header::new(Encoding::ZBIN32, Type::ZEOF)
             .count(offset)
             .build(),
     )
@@ -449,7 +474,7 @@ mod tests {
         ];
         assert_eq!(
             &mut parse_header(&i[..]).unwrap().unwrap(),
-            Frame::new(Encoding::ZHEX, Type::ZRINIT).flags(&[0x1, 0x2, 0x3, 0x4])
+            Header::new(Encoding::ZHEX, Type::ZRINIT).flags(&[0x1, 0x2, 0x3, 0x4])
         );
 
         let i = [
@@ -464,7 +489,7 @@ mod tests {
         ];
         assert_eq!(
             &mut parse_header(&i[..]).unwrap().unwrap(),
-            Frame::new(Encoding::ZBIN, Type::ZRINIT).flags(&[0xa, 0xb, 0xc, 0xd])
+            Header::new(Encoding::ZBIN, Type::ZRINIT).flags(&[0xa, 0xb, 0xc, 0xd])
         );
 
         let i = [
@@ -481,7 +506,7 @@ mod tests {
         ];
         assert_eq!(
             &mut parse_header(&i[..]).unwrap().unwrap(),
-            Frame::new(Encoding::ZBIN32, Type::ZRINIT).flags(&[0xa, 0xb, 0xc, 0xd])
+            Header::new(Encoding::ZBIN32, Type::ZRINIT).flags(&[0xa, 0xb, 0xc, 0xd])
         );
 
         let i = [
@@ -498,7 +523,7 @@ mod tests {
         ];
         assert_eq!(
             &mut parse_header(&i[..]).unwrap().unwrap(),
-            Frame::new(Encoding::ZBIN, Type::ZRINIT).flags(&[0xa, 0x7f, 0xd, 0xff])
+            Header::new(Encoding::ZBIN, Type::ZRINIT).flags(&[0xa, 0x7f, 0xd, 0xff])
         );
 
         let frame = Type::ZRINIT;

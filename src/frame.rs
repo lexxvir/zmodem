@@ -2,15 +2,12 @@
 //! ZMODEM transfer protocol frame
 
 use consts::*;
-use core::convert::TryFrom;
+use core::{convert::TryFrom, mem::size_of, slice::from_raw_parts};
 use hex::*;
 use proto;
 use std::fmt::{self, Display};
-use std::io::ErrorKind;
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
-
-pub const FRAME_TYPES: u8 = 20;
 
 #[repr(u8)]
 #[allow(dead_code, clippy::upper_case_acronyms)]
@@ -22,16 +19,17 @@ pub enum Encoding {
     ZBIN32 = 0x43,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct InvalidEncoding;
+
 impl TryFrom<u8> for Encoding {
-    // TODO: create an error type for catching unexpected traffic coming from
-    // the serial port, instead of re-using `std::io::Error`.
-    type Error = std::io::Error;
+    type Error = InvalidEncoding;
 
     fn try_from(value: u8) -> Result<Self, Self::Error> {
         if let Some(e) = Encoding::iter().find(|e| value == *e as u8) {
             Ok(e)
         } else {
-            Err(ErrorKind::InvalidInput.into())
+            Err(InvalidEncoding)
         }
     }
 }
@@ -44,7 +42,7 @@ impl Display for Encoding {
 
 #[repr(u8)]
 #[allow(dead_code, clippy::upper_case_acronyms)]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, EnumIter, Eq, PartialEq)]
 /// The ZMODEM frame type
 pub enum Type {
     /// Request receive init
@@ -89,19 +87,18 @@ pub enum Type {
     ZSTDERR = 19,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct InvalidType;
+
 impl TryFrom<u8> for Type {
-    // TODO: create a frame error type for catching unexpected traffic coming
-    // from the serial port, and use it here.
-    type Error = std::io::Error;
+    type Error = InvalidType;
 
     fn try_from(value: u8) -> Result<Self, Self::Error> {
-        if value >= FRAME_TYPES {
-            return Err(ErrorKind::InvalidInput.into());
+        if let Some(e) = Type::iter().find(|e| value == *e as u8) {
+            Ok(e)
+        } else {
+            Err(InvalidType)
         }
-
-        // SAFETY: conversion is safe as the range is checked and the enum is
-        // not sparse.
-        unsafe { Ok(core::mem::transmute::<u8, Type>(value)) }
     }
 }
 
@@ -112,27 +109,35 @@ impl Display for Type {
 }
 
 #[derive(Debug, Eq, PartialEq)]
-pub struct Frame {
+pub struct Header {
     encoding: Encoding,
     frame_type: Type,
     flags: [u8; 4],
 }
 
-impl Frame {
-    pub fn new(encoding: Encoding, frame_type: Type) -> Frame {
-        Frame {
+impl From<&Header> for &[u8] {
+    fn from(value: &Header) -> Self {
+        // SAFETY: out-of-boundary is not possible, given that the size constraint
+        // exists in the struct definition.
+        unsafe { from_raw_parts((value as *const Header) as *const u8, size_of::<Header>()) }
+    }
+}
+
+impl Header {
+    pub fn new(encoding: Encoding, frame_type: Type) -> Header {
+        Header {
             encoding,
             frame_type,
             flags: [0; 4],
         }
     }
 
-    pub fn flags<'b>(&'b mut self, flags: &[u8; 4]) -> &'b mut Frame {
+    pub fn flags<'b>(&'b mut self, flags: &[u8; 4]) -> &'b mut Header {
         self.flags = *flags;
         self
     }
 
-    pub fn count(&mut self, count: u32) -> &mut Frame {
+    pub fn count(&mut self, count: u32) -> &mut Header {
         self.flags = [
             count as u8,
             (count >> 8) as u8,
@@ -158,9 +163,7 @@ impl Frame {
         }
 
         out.push(ZLDE);
-        out.push(self.encoding as u8);
-        out.push(self.frame_type as u8);
-        out.extend_from_slice(&self.flags);
+        out.extend_from_slice(self.into());
 
         // FIXME: Offsets are defined with magic numbers. Check that the offsets
         // are indeed correct and clarify their purpose.
@@ -200,7 +203,7 @@ impl Frame {
     }
 }
 
-impl fmt::Display for Frame {
+impl fmt::Display for Header {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{:8} {}", self.encoding, self.frame_type)
     }
@@ -209,12 +212,12 @@ impl fmt::Display for Frame {
 #[test]
 fn test_frame() {
     assert_eq!(
-        Frame::new(Encoding::ZBIN, Type::ZRQINIT).build(),
+        Header::new(Encoding::ZBIN, Type::ZRQINIT).build(),
         vec![ZPAD, ZLDE, Encoding::ZBIN as u8, 0, 0, 0, 0, 0, 0, 0]
     );
 
     assert_eq!(
-        Frame::new(Encoding::ZBIN32, Type::ZRQINIT).build(),
+        Header::new(Encoding::ZBIN32, Type::ZRQINIT).build(),
         vec![
             ZPAD,
             ZLDE,
@@ -232,21 +235,21 @@ fn test_frame() {
     );
 
     assert_eq!(
-        Frame::new(Encoding::ZBIN, Type::ZRQINIT)
+        Header::new(Encoding::ZBIN, Type::ZRQINIT)
             .flags(&[1; 4])
             .build(),
         vec![ZPAD, ZLDE, Encoding::ZBIN as u8, 0, 1, 1, 1, 1, 98, 148]
     );
 
     assert_eq!(
-        Frame::new(Encoding::ZBIN, Type::ZRQINIT)
+        Header::new(Encoding::ZBIN, Type::ZRQINIT)
             .flags(&[1; 4])
             .build(),
         vec![ZPAD, ZLDE, Encoding::ZBIN as u8, 0, 1, 1, 1, 1, 98, 148]
     );
 
     assert_eq!(
-        Frame::new(Encoding::ZHEX, Type::ZRQINIT)
+        Header::new(Encoding::ZHEX, Type::ZRQINIT)
             .flags(&[1; 4])
             .build(),
         vec![

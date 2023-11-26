@@ -29,7 +29,7 @@ impl State {
         State::SendingZRINIT
     }
 
-    fn next(self, frame: &Frame) -> State {
+    fn next(self, frame: &Header) -> State {
         match (self, frame.frame_type()) {
             (State::SendingZRINIT, Type::ZFILE) => State::ProcessingZFILE,
             (State::SendingZRINIT, _) => State::SendingZRINIT,
