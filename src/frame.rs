@@ -1,5 +1,4 @@
 use consts::*;
-use crc;
 use hex::*;
 use proto;
 use std::fmt;
@@ -58,9 +57,9 @@ impl Frame {
         // FIXME: Offsets are defined with magic numbers. Check that the offsets
         // are indeed correct and clarify their purpose.
         out.append(&mut match self.encoding {
-            ZBIN32 => crc::CRC32.checksum(&out[3..]).to_le_bytes().to_vec(),
-            ZHEX => crc::CRC16.checksum(&out[4..]).to_be_bytes().to_vec(),
-            _ => crc::CRC16.checksum(&out[3..]).to_be_bytes().to_vec(),
+            ZBIN32 => CRC32.checksum(&out[3..]).to_le_bytes().to_vec(),
+            ZHEX => CRC16.checksum(&out[4..]).to_be_bytes().to_vec(),
+            _ => CRC16.checksum(&out[3..]).to_be_bytes().to_vec(),
         });
 
         if self.encoding == ZHEX {

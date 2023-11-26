@@ -3,7 +3,6 @@ use log::LogLevel::Debug;
 use std::io;
 
 use consts::*;
-use crc::*;
 use frame::*;
 
 /// Looking for sequence: ZPAD [ZPAD] ZLDE

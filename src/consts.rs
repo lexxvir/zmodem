@@ -1,3 +1,8 @@
+use crc::{Crc, CRC_16_XMODEM, CRC_32_ISO_HDLC};
+
+pub const CRC16: Crc<u16> = Crc::<u16>::new(&CRC_16_XMODEM);
+pub const CRC32: Crc<u32> = Crc::<u32>::new(&CRC_32_ISO_HDLC);
+
 pub const ZPAD: u8 = b'*';
 pub const ZLDE: u8 = 0x18;
 pub const ZLDEE: u8 = 0x58;
