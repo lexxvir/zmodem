@@ -14,7 +14,7 @@ pub const FRAME_TYPES: u8 = 20;
 #[allow(dead_code, clippy::upper_case_acronyms)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 /// The ZMODEM frame type
-pub enum FrameType {
+pub enum Type {
     /// Request receive init
     ZRQINIT = 0,
     /// Receive init
@@ -57,7 +57,7 @@ pub enum FrameType {
     ZSTDERR = 19,
 }
 
-impl TryFrom<u8> for FrameType {
+impl TryFrom<u8> for Type {
     // TODO: create a frame error type for catching unexpected traffic coming
     // from the serial port, and use it here.
     type Error = std::io::Error;
@@ -69,11 +69,11 @@ impl TryFrom<u8> for FrameType {
 
         // SAFETY: conversion is safe as the range is checked and the enum is
         // not sparse.
-        unsafe { Ok(core::mem::transmute::<u8, FrameType>(value)) }
+        unsafe { Ok(core::mem::transmute::<u8, Type>(value)) }
     }
 }
 
-impl Display for FrameType {
+impl Display for Type {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{:#02x}", *self as u8)
     }
@@ -82,12 +82,12 @@ impl Display for FrameType {
 #[derive(Debug, Eq, PartialEq)]
 pub struct Frame {
     encoding: u8,
-    frame_type: FrameType,
+    frame_type: Type,
     flags: [u8; 4],
 }
 
 impl Frame {
-    pub fn new(encoding: u8, frame_type: FrameType) -> Frame {
+    pub fn new(encoding: u8, frame_type: Type) -> Frame {
         Frame {
             encoding,
             frame_type,
@@ -151,7 +151,7 @@ impl Frame {
         if self.encoding == ZHEX {
             out.extend_from_slice(b"\r\n");
 
-            if self.frame_type != FrameType::ZACK && self.frame_type != FrameType::ZFIN {
+            if self.frame_type != Type::ZACK && self.frame_type != Type::ZFIN {
                 out.push(XON);
             }
         }
@@ -159,7 +159,7 @@ impl Frame {
         out
     }
 
-    pub fn frame_type(&self) -> FrameType {
+    pub fn frame_type(&self) -> Type {
         self.frame_type
     }
 
@@ -184,27 +184,27 @@ impl fmt::Display for Frame {
 #[test]
 fn test_frame() {
     assert_eq!(
-        Frame::new(ZBIN, FrameType::ZRQINIT).build(),
+        Frame::new(ZBIN, Type::ZRQINIT).build(),
         vec![ZPAD, ZLDE, ZBIN, 0, 0, 0, 0, 0, 0, 0]
     );
 
     assert_eq!(
-        Frame::new(ZBIN32, FrameType::ZRQINIT).build(),
+        Frame::new(ZBIN32, Type::ZRQINIT).build(),
         vec![ZPAD, ZLDE, ZBIN32, 0, 0, 0, 0, 0, 29, 247, 34, 198]
     );
 
     assert_eq!(
-        Frame::new(ZBIN, FrameType::ZRQINIT).flags(&[1; 4]).build(),
+        Frame::new(ZBIN, Type::ZRQINIT).flags(&[1; 4]).build(),
         vec![ZPAD, ZLDE, ZBIN, 0, 1, 1, 1, 1, 98, 148]
     );
 
     assert_eq!(
-        Frame::new(ZBIN, FrameType::ZRQINIT).flags(&[1; 4]).build(),
+        Frame::new(ZBIN, Type::ZRQINIT).flags(&[1; 4]).build(),
         vec![ZPAD, ZLDE, ZBIN, 0, 1, 1, 1, 1, 98, 148]
     );
 
     assert_eq!(
-        Frame::new(ZHEX, FrameType::ZRQINIT).flags(&[1; 4]).build(),
+        Frame::new(ZHEX, Type::ZRQINIT).flags(&[1; 4]).build(),
         vec![
             ZPAD, ZPAD, ZLDE, ZHEX, b'0', b'0', b'0', b'1', b'0', b'1', b'0', b'1', b'0', b'1', 54,
             50, 57, 52, b'\r', b'\n', XON

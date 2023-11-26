@@ -78,7 +78,7 @@ where
     }
 
     let ft_raw: u8 = v[0];
-    let ft: FrameType = FrameType::try_from(ft_raw)?;
+    let ft: Type = Type::try_from(ft_raw)?;
     let mut frame = Frame::new(header, ft);
     frame.flags(&[v[1], v[2], v[3], v[4]]);
 
@@ -227,7 +227,7 @@ where
 {
     debug!("write ZRINIT");
     w.write_all(
-        &Frame::new(ZHEX, FrameType::ZRINIT)
+        &Frame::new(ZHEX, Type::ZRINIT)
             .flags(&[0, 0, 0, 0x23])
             .build(),
     )
@@ -239,7 +239,7 @@ where
     W: io::Write,
 {
     debug!("write ZRQINIT");
-    w.write_all(&Frame::new(ZHEX, FrameType::ZRQINIT).build())
+    w.write_all(&Frame::new(ZHEX, Type::ZRQINIT).build())
 }
 
 /// Writes ZFILE frame
@@ -248,7 +248,7 @@ where
     W: io::Write,
 {
     debug!("write ZFILE");
-    w.write_all(&Frame::new(ZBIN32, FrameType::ZFILE).build())?;
+    w.write_all(&Frame::new(ZBIN32, Type::ZFILE).build())?;
 
     let mut zfile_data = format!("{}\0", filename);
     if let Some(size) = filesize {
@@ -266,7 +266,7 @@ where
     W: io::Write,
 {
     debug!("write ZACK bytes={}", count);
-    w.write_all(&Frame::new(ZHEX, FrameType::ZACK).count(count).build())
+    w.write_all(&Frame::new(ZHEX, Type::ZACK).count(count).build())
 }
 
 /// Writes ZFIN frame
@@ -275,7 +275,7 @@ where
     W: io::Write,
 {
     debug!("write ZFIN");
-    w.write_all(&Frame::new(ZHEX, FrameType::ZFIN).build())
+    w.write_all(&Frame::new(ZHEX, Type::ZFIN).build())
 }
 
 /// Writes ZNAK frame
@@ -284,7 +284,7 @@ where
     W: io::Write,
 {
     debug!("write ZNAK");
-    w.write_all(&Frame::new(ZHEX, FrameType::ZNAK).build())
+    w.write_all(&Frame::new(ZHEX, Type::ZNAK).build())
 }
 
 /// Writes ZRPOS frame
@@ -293,7 +293,7 @@ where
     W: io::Write,
 {
     debug!("write ZRPOS bytes={}", count);
-    w.write_all(&Frame::new(ZHEX, FrameType::ZRPOS).count(count).build())
+    w.write_all(&Frame::new(ZHEX, Type::ZRPOS).count(count).build())
 }
 
 /// Writes ZDATA frame
@@ -302,7 +302,7 @@ where
     W: io::Write,
 {
     debug!("write ZDATA offset={}", offset);
-    w.write_all(&Frame::new(ZBIN32, FrameType::ZDATA).count(offset).build())
+    w.write_all(&Frame::new(ZBIN32, Type::ZDATA).count(offset).build())
 }
 
 /// Writes ZEOF frame
@@ -311,7 +311,7 @@ where
     W: io::Write,
 {
     debug!("write ZEOF offset={}", offset);
-    w.write_all(&Frame::new(ZBIN32, FrameType::ZEOF).count(offset).build())
+    w.write_all(&Frame::new(ZBIN32, Type::ZEOF).count(offset).build())
 }
 
 pub fn write_zlde_data<W>(w: &mut W, zcrc_byte: u8, data: &[u8]) -> io::Result<()>
@@ -428,17 +428,17 @@ mod tests {
         ];
         assert_eq!(
             &mut parse_header(&i[..]).unwrap().unwrap(),
-            Frame::new(ZHEX, FrameType::ZRINIT).flags(&[0x1, 0x2, 0x3, 0x4])
+            Frame::new(ZHEX, Type::ZRINIT).flags(&[0x1, 0x2, 0x3, 0x4])
         );
 
-        let frame = FrameType::ZRINIT;
+        let frame = Type::ZRINIT;
         let i = [ZBIN, frame as u8, 0xa, 0xb, 0xc, 0xd, 0xa6, 0xcb];
         assert_eq!(
             &mut parse_header(&i[..]).unwrap().unwrap(),
             Frame::new(ZBIN, frame).flags(&[0xa, 0xb, 0xc, 0xd])
         );
 
-        let frame = FrameType::ZRINIT;
+        let frame = Type::ZRINIT;
         let i = [
             ZBIN32,
             frame as u8,
@@ -456,7 +456,7 @@ mod tests {
             Frame::new(ZBIN32, frame).flags(&[0xa, 0xb, 0xc, 0xd])
         );
 
-        let frame = FrameType::ZRINIT;
+        let frame = Type::ZRINIT;
         let i = [
             ZBIN,
             frame as u8,
@@ -474,7 +474,7 @@ mod tests {
             Frame::new(ZBIN, frame).flags(&[0xa, 0x7f, 0xd, 0xff])
         );
 
-        let frame = FrameType::ZRINIT;
+        let frame = Type::ZRINIT;
         let i = [0xaa, frame as u8, 0xa, 0xb, 0xc, 0xd, 0xf, 0xf];
         assert_eq!(parse_header(&i[..]).unwrap(), None);
     }

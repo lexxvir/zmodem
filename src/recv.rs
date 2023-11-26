@@ -31,17 +31,17 @@ impl State {
 
     fn next(self, frame: &Frame) -> State {
         match (self, frame.frame_type()) {
-            (State::SendingZRINIT, FrameType::ZFILE) => State::ProcessingZFILE,
+            (State::SendingZRINIT, Type::ZFILE) => State::ProcessingZFILE,
             (State::SendingZRINIT, _) => State::SendingZRINIT,
 
-            (State::ProcessingZFILE, FrameType::ZDATA) => State::ReceivingData,
+            (State::ProcessingZFILE, Type::ZDATA) => State::ReceivingData,
             (State::ProcessingZFILE, _) => State::ProcessingZFILE,
 
-            (State::ReceivingData, FrameType::ZDATA) => State::ReceivingData,
-            (State::ReceivingData, FrameType::ZEOF) => State::CheckingData,
+            (State::ReceivingData, Type::ZDATA) => State::ReceivingData,
+            (State::ReceivingData, Type::ZEOF) => State::CheckingData,
 
-            (State::CheckingData, FrameType::ZDATA) => State::ReceivingData,
-            (State::CheckingData, FrameType::ZFIN) => State::Done,
+            (State::CheckingData, Type::ZDATA) => State::ReceivingData,
+            (State::CheckingData, Type::ZFIN) => State::Done,
 
             (s, _) => {
                 error!("Unexpected (state, frame) combination: {:#?} {}", s, frame);

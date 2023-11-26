@@ -41,21 +41,21 @@ impl State {
 
     fn next(self, frame: &Frame) -> State {
         match (self, frame.frame_type()) {
-            (State::WaitingInit, FrameType::ZRINIT) => State::SendingZFILE,
+            (State::WaitingInit, Type::ZRINIT) => State::SendingZFILE,
             (State::WaitingInit, _) => State::SendingZRQINIT,
 
-            (State::SendingZRQINIT, FrameType::ZRINIT) => State::SendingZFILE,
+            (State::SendingZRQINIT, Type::ZRINIT) => State::SendingZFILE,
 
-            (State::SendingZFILE, FrameType::ZRPOS) => State::SendingData,
-            (State::SendingZFILE, FrameType::ZRINIT) => State::WaitingZPOS,
+            (State::SendingZFILE, Type::ZRPOS) => State::SendingData,
+            (State::SendingZFILE, Type::ZRINIT) => State::WaitingZPOS,
 
-            (State::WaitingZPOS, FrameType::ZRPOS) => State::SendingData,
+            (State::WaitingZPOS, Type::ZRPOS) => State::SendingData,
 
-            (State::SendingData, FrameType::ZACK) => State::SendingData,
-            (State::SendingData, FrameType::ZRPOS) => State::SendingData,
-            (State::SendingData, FrameType::ZRINIT) => State::SendingZFIN,
+            (State::SendingData, Type::ZACK) => State::SendingData,
+            (State::SendingData, Type::ZRPOS) => State::SendingData,
+            (State::SendingData, Type::ZRINIT) => State::SendingZFIN,
 
-            (State::SendingZFIN, FrameType::ZFIN) => State::Done,
+            (State::SendingZFIN, Type::ZFIN) => State::Done,
 
             (s, _) => {
                 error!("Unexpected (state, frame) combination: {:#?} {}", s, frame);
