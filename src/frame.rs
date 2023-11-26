@@ -55,8 +55,13 @@ impl Frame {
         out.push(self.ftype);
         out.extend_from_slice(&self.flags);
 
-        let mut crc = get_crc(self.header, &out);
-        out.append(&mut crc);
+        // FIXME: Offsets are defined with magic numbers. Check that the offsets
+        // are indeed correct and clarify their purpose.
+        out.append(&mut match self.header {
+            ZBIN32 => crc::CRC32.checksum(&out[3..]).to_le_bytes().to_vec(),
+            ZHEX => crc::CRC16.checksum(&out[4..]).to_be_bytes().to_vec(),
+            _ => crc::CRC16.checksum(&out[3..]).to_be_bytes().to_vec()
+        });
 
         if self.header == ZHEX {
             let hex = out.drain(4..).collect::<Vec<u8>>().to_hex();
@@ -85,18 +90,6 @@ impl Frame {
 
     pub fn get_header(&self) -> u8 {
         self.header
-    }
-}
-
-fn get_crc(header: u8, buf: &[u8]) -> Vec<u8> {
-    let offset = match header {
-        ZHEX => 4,
-        _ => 3,
-    };
-
-    match header {
-        ZBIN32 => crc::get_crc32(&buf[offset..], None).to_vec(),
-        _ => crc::get_crc16(&buf[offset..], None).to_vec(),
     }
 }
 

@@ -1,7 +1,7 @@
 use crc32::{Crc, CRC_16_XMODEM, CRC_32_ISO_HDLC};
 
-const CRC16: Crc<u16> = Crc::<u16>::new(&CRC_16_XMODEM);
-const CRC32: Crc<u32> = Crc::<u32>::new(&CRC_32_ISO_HDLC);
+pub const CRC16: Crc<u16> = Crc::<u16>::new(&CRC_16_XMODEM);
+pub const CRC32: Crc<u32> = Crc::<u32>::new(&CRC_32_ISO_HDLC);
 
 pub fn get_crc16(buf: &[u8], maybe_zcrc: Option<u8>) -> [u8; 2] {
     let mut digest = CRC16.digest();
