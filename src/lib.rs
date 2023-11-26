@@ -1,6 +1,7 @@
 #[macro_use]
 extern crate log;
 
+extern crate core;
 extern crate crc;
 extern crate hex;
 extern crate hexdump;

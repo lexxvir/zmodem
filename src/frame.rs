@@ -1,20 +1,91 @@
 use consts::*;
+use core::convert::TryFrom;
 use hex::*;
 use proto;
-use std::fmt;
+use std::fmt::{self, Display};
+use std::io::ErrorKind;
+
+pub const FRAME_TYPES: u8 = 20;
+
+#[repr(u8)]
+#[allow(dead_code, clippy::upper_case_acronyms)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// The ZMODEM frame type
+pub enum FrameType {
+    /// Request receive init
+    ZRQINIT = 0,
+    /// Receive init
+    ZRINIT = 1,
+    /// Send init sequence (optional)
+    ZSINIT = 2,
+    /// ACK to above
+    ZACK = 3,
+    /// File name from sender
+    ZFILE = 4,
+    /// To sender: skip this file
+    ZSKIP = 5,
+    /// Last packet was garbled
+    ZNAK = 6,
+    /// Abort batch transfers
+    ZABORT = 7,
+    /// Finish session
+    ZFIN = 8,
+    /// Resume data trans at this position
+    ZRPOS = 9,
+    /// Data packet(s) follow
+    ZDATA = 10,
+    /// End of file
+    ZEOF = 11,
+    /// Fatal Read or Write error Detected
+    ZFERR = 12,
+    /// Request for file CRC and response
+    ZCRC = 13,
+    /// Receiver's Challenge
+    ZCHALLENGE = 14,
+    /// Request is complete
+    ZCOMPL = 15,
+    /// Other end canned session with CAN*5
+    ZCAN = 16,
+    /// Request for free bytes on filesystem
+    ZFREECNT = 17,
+    /// Command from sending program
+    ZCOMMAND = 18,
+    ///  Output to standard error, data follows
+    ZSTDERR = 19,
+}
+
+impl TryFrom<u8> for FrameType {
+    type Error = std::io::Error;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        // TODO: create in-crate error type later on for the sake of `no_std`
+        // compatibility.
+        if value >= FRAME_TYPES {
+            return Err(ErrorKind::InvalidInput.into());
+        }
+
+        unsafe { Ok(core::mem::transmute::<u8, FrameType>(value)) }
+    }
+}
+
+impl Display for FrameType {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:#02x}", *self as u8)
+    }
+}
 
 #[derive(Debug, Eq, PartialEq)]
 pub struct Frame {
     encoding: u8,
-    ftype: u8,
+    frame_type: FrameType,
     flags: [u8; 4],
 }
 
 impl Frame {
-    pub fn new(encoding: u8, ftype: u8) -> Frame {
+    pub fn new(encoding: u8, frame_type: FrameType) -> Frame {
         Frame {
             encoding,
-            ftype,
+            frame_type,
             flags: [0; 4],
         }
     }
@@ -51,7 +122,7 @@ impl Frame {
 
         out.push(ZLDE);
         out.push(self.encoding);
-        out.push(self.ftype);
+        out.push(self.frame_type as u8);
         out.extend_from_slice(&self.flags);
 
         // FIXME: Offsets are defined with magic numbers. Check that the offsets
@@ -75,7 +146,7 @@ impl Frame {
         if self.encoding == ZHEX {
             out.extend_from_slice(b"\r\n");
 
-            if self.ftype != ZACK && self.ftype != ZFIN {
+            if self.frame_type != FrameType::ZACK && self.frame_type != FrameType::ZFIN {
                 out.push(XON);
             }
         }
@@ -83,8 +154,8 @@ impl Frame {
         out
     }
 
-    pub fn get_frame_type(&self) -> u8 {
-        self.ftype
+    pub fn frame_type(&self) -> FrameType {
+        self.frame_type
     }
 
     pub fn encoding(&self) -> u8 {
@@ -101,58 +172,34 @@ impl fmt::Display for Frame {
             _ => "???",
         };
 
-        let ft = match self.ftype {
-            ZRQINIT => "ZRQINIT",
-            ZRINIT => "ZRINIT",
-            ZSINIT => "ZSINIT",
-            ZACK => "ZACK",
-            ZFILE => "ZFILE",
-            ZSKIP => "ZSKIP",
-            ZNAK => "ZNAK",
-            ZABORT => "ZABORT",
-            ZFIN => "ZFIN",
-            ZRPOS => "ZRPOS",
-            ZDATA => "ZDATA",
-            ZEOF => "ZEOF",
-            ZFERR => "ZFERR",
-            ZCRC => "ZCRC",
-            ZCHALLENGE => "ZCHALLENGE",
-            ZCOMPL => "ZCOMPL",
-            ZCAN => "ZCAN",
-            ZFREECNT => "ZFREECNT",
-            ZCOMMAND => "ZCOMMAND",
-            ZSTDERR => "ZSTDERR",
-            _ => "???",
-        };
-
-        write!(f, "{}({})", hdr, ft)
+        write!(f, "{:8} {}", hdr, self.frame_type)
     }
 }
 
 #[test]
 fn test_frame() {
     assert_eq!(
-        Frame::new(ZBIN, 0).build(),
+        Frame::new(ZBIN, FrameType::ZRQINIT).build(),
         vec![ZPAD, ZLDE, ZBIN, 0, 0, 0, 0, 0, 0, 0]
     );
 
     assert_eq!(
-        Frame::new(ZBIN32, 0).build(),
+        Frame::new(ZBIN32, FrameType::ZRQINIT).build(),
         vec![ZPAD, ZLDE, ZBIN32, 0, 0, 0, 0, 0, 29, 247, 34, 198]
     );
 
     assert_eq!(
-        Frame::new(ZBIN, 0).flags(&[1; 4]).build(),
+        Frame::new(ZBIN, FrameType::ZRQINIT).flags(&[1; 4]).build(),
         vec![ZPAD, ZLDE, ZBIN, 0, 1, 1, 1, 1, 98, 148]
     );
 
     assert_eq!(
-        Frame::new(ZBIN, 0).flags(&[1; 4]).build(),
+        Frame::new(ZBIN, FrameType::ZRQINIT).flags(&[1; 4]).build(),
         vec![ZPAD, ZLDE, ZBIN, 0, 1, 1, 1, 1, 98, 148]
     );
 
     assert_eq!(
-        Frame::new(ZHEX, 0).flags(&[1; 4]).build(),
+        Frame::new(ZHEX, FrameType::ZRQINIT).flags(&[1; 4]).build(),
         vec![
             ZPAD, ZPAD, ZLDE, ZHEX, b'0', b'0', b'0', b'1', b'0', b'1', b'0', b'1', b'0', b'1', 54,
             50, 57, 52, b'\r', b'\n', XON

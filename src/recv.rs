@@ -2,7 +2,6 @@ use std::io::{Read, Result, Write};
 use std::str::from_utf8;
 use std::{thread, time};
 
-use consts::*;
 use frame::*;
 use proto::*;
 use rwlog;
@@ -31,18 +30,18 @@ impl State {
     }
 
     fn next(self, frame: &Frame) -> State {
-        match (self, frame.get_frame_type()) {
-            (State::SendingZRINIT, ZFILE) => State::ProcessingZFILE,
+        match (self, frame.frame_type()) {
+            (State::SendingZRINIT, FrameType::ZFILE) => State::ProcessingZFILE,
             (State::SendingZRINIT, _) => State::SendingZRINIT,
 
-            (State::ProcessingZFILE, ZDATA) => State::ReceivingData,
+            (State::ProcessingZFILE, FrameType::ZDATA) => State::ReceivingData,
             (State::ProcessingZFILE, _) => State::ProcessingZFILE,
 
-            (State::ReceivingData, ZDATA) => State::ReceivingData,
-            (State::ReceivingData, ZEOF) => State::CheckingData,
+            (State::ReceivingData, FrameType::ZDATA) => State::ReceivingData,
+            (State::ReceivingData, FrameType::ZEOF) => State::CheckingData,
 
-            (State::CheckingData, ZDATA) => State::ReceivingData,
-            (State::CheckingData, ZFIN) => State::Done,
+            (State::CheckingData, FrameType::ZDATA) => State::ReceivingData,
+            (State::CheckingData, FrameType::ZFIN) => State::Done,
 
             (s, _) => {
                 error!("Unexpected (state, frame) combination: {:#?} {}", s, frame);
