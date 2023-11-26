@@ -7,6 +7,8 @@ extern crate core;
 extern crate crc;
 extern crate hex;
 extern crate hexdump;
+extern crate strum;
+extern crate strum_macros;
 
 mod consts;
 mod frame;

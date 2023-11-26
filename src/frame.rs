@@ -7,8 +7,40 @@ use hex::*;
 use proto;
 use std::fmt::{self, Display};
 use std::io::ErrorKind;
+use strum::IntoEnumIterator;
+use strum_macros::EnumIter;
 
 pub const FRAME_TYPES: u8 = 20;
+
+#[repr(u8)]
+#[allow(dead_code, clippy::upper_case_acronyms)]
+#[derive(Clone, Copy, Debug, EnumIter, Eq, PartialEq)]
+/// The ZMODEM frame type
+pub enum Encoding {
+    ZBIN = 0x41,
+    ZHEX = 0x42,
+    ZBIN32 = 0x43,
+}
+
+impl TryFrom<u8> for Encoding {
+    // TODO: create an error type for catching unexpected traffic coming from
+    // the serial port, instead of re-using `std::io::Error`.
+    type Error = std::io::Error;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        if let Some(e) = Encoding::iter().find(|e| value == *e as u8) {
+            Ok(e)
+        } else {
+            Err(ErrorKind::InvalidInput.into())
+        }
+    }
+}
+
+impl Display for Encoding {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:#02x}", *self as u8)
+    }
+}
 
 #[repr(u8)]
 #[allow(dead_code, clippy::upper_case_acronyms)]
@@ -81,13 +113,13 @@ impl Display for Type {
 
 #[derive(Debug, Eq, PartialEq)]
 pub struct Frame {
-    encoding: u8,
+    encoding: Encoding,
     frame_type: Type,
     flags: [u8; 4],
 }
 
 impl Frame {
-    pub fn new(encoding: u8, frame_type: Type) -> Frame {
+    pub fn new(encoding: Encoding, frame_type: Type) -> Frame {
         Frame {
             encoding,
             frame_type,
@@ -121,24 +153,24 @@ impl Frame {
         let mut out = Vec::new();
 
         out.push(ZPAD);
-        if self.encoding == ZHEX {
+        if self.encoding == Encoding::ZHEX {
             out.push(ZPAD);
         }
 
         out.push(ZLDE);
-        out.push(self.encoding);
+        out.push(self.encoding as u8);
         out.push(self.frame_type as u8);
         out.extend_from_slice(&self.flags);
 
         // FIXME: Offsets are defined with magic numbers. Check that the offsets
         // are indeed correct and clarify their purpose.
         out.append(&mut match self.encoding {
-            ZBIN32 => CRC32.checksum(&out[3..]).to_le_bytes().to_vec(),
-            ZHEX => CRC16.checksum(&out[4..]).to_be_bytes().to_vec(),
+            Encoding::ZBIN32 => CRC32.checksum(&out[3..]).to_le_bytes().to_vec(),
+            Encoding::ZHEX => CRC16.checksum(&out[4..]).to_be_bytes().to_vec(),
             _ => CRC16.checksum(&out[3..]).to_be_bytes().to_vec(),
         });
 
-        if self.encoding == ZHEX {
+        if self.encoding == Encoding::ZHEX {
             let hex = out.drain(4..).collect::<Vec<u8>>().to_hex();
             out.extend_from_slice(hex.as_bytes());
         }
@@ -148,7 +180,7 @@ impl Frame {
         proto::escape_buf(&tmp, &mut tmp2);
         out.extend_from_slice(&tmp2);
 
-        if self.encoding == ZHEX {
+        if self.encoding == Encoding::ZHEX {
             out.extend_from_slice(b"\r\n");
 
             if self.frame_type != Type::ZACK && self.frame_type != Type::ZFIN {
@@ -163,51 +195,82 @@ impl Frame {
         self.frame_type
     }
 
-    pub fn encoding(&self) -> u8 {
+    pub fn encoding(&self) -> Encoding {
         self.encoding
     }
 }
 
 impl fmt::Display for Frame {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let hdr = match self.encoding {
-            ZHEX => "ZHEX",
-            ZBIN => "ZBIN",
-            ZBIN32 => "ZBIN32",
-            _ => "???",
-        };
-
-        write!(f, "{:8} {}", hdr, self.frame_type)
+        write!(f, "{:8} {}", self.encoding, self.frame_type)
     }
 }
 
 #[test]
 fn test_frame() {
     assert_eq!(
-        Frame::new(ZBIN, Type::ZRQINIT).build(),
-        vec![ZPAD, ZLDE, ZBIN, 0, 0, 0, 0, 0, 0, 0]
+        Frame::new(Encoding::ZBIN, Type::ZRQINIT).build(),
+        vec![ZPAD, ZLDE, Encoding::ZBIN as u8, 0, 0, 0, 0, 0, 0, 0]
     );
 
     assert_eq!(
-        Frame::new(ZBIN32, Type::ZRQINIT).build(),
-        vec![ZPAD, ZLDE, ZBIN32, 0, 0, 0, 0, 0, 29, 247, 34, 198]
-    );
-
-    assert_eq!(
-        Frame::new(ZBIN, Type::ZRQINIT).flags(&[1; 4]).build(),
-        vec![ZPAD, ZLDE, ZBIN, 0, 1, 1, 1, 1, 98, 148]
-    );
-
-    assert_eq!(
-        Frame::new(ZBIN, Type::ZRQINIT).flags(&[1; 4]).build(),
-        vec![ZPAD, ZLDE, ZBIN, 0, 1, 1, 1, 1, 98, 148]
-    );
-
-    assert_eq!(
-        Frame::new(ZHEX, Type::ZRQINIT).flags(&[1; 4]).build(),
+        Frame::new(Encoding::ZBIN32, Type::ZRQINIT).build(),
         vec![
-            ZPAD, ZPAD, ZLDE, ZHEX, b'0', b'0', b'0', b'1', b'0', b'1', b'0', b'1', b'0', b'1', 54,
-            50, 57, 52, b'\r', b'\n', XON
+            ZPAD,
+            ZLDE,
+            Encoding::ZBIN32 as u8,
+            0,
+            0,
+            0,
+            0,
+            0,
+            29,
+            247,
+            34,
+            198
+        ]
+    );
+
+    assert_eq!(
+        Frame::new(Encoding::ZBIN, Type::ZRQINIT)
+            .flags(&[1; 4])
+            .build(),
+        vec![ZPAD, ZLDE, Encoding::ZBIN as u8, 0, 1, 1, 1, 1, 98, 148]
+    );
+
+    assert_eq!(
+        Frame::new(Encoding::ZBIN, Type::ZRQINIT)
+            .flags(&[1; 4])
+            .build(),
+        vec![ZPAD, ZLDE, Encoding::ZBIN as u8, 0, 1, 1, 1, 1, 98, 148]
+    );
+
+    assert_eq!(
+        Frame::new(Encoding::ZHEX, Type::ZRQINIT)
+            .flags(&[1; 4])
+            .build(),
+        vec![
+            ZPAD,
+            ZPAD,
+            ZLDE,
+            Encoding::ZHEX as u8,
+            b'0',
+            b'0',
+            b'0',
+            b'1',
+            b'0',
+            b'1',
+            b'0',
+            b'1',
+            b'0',
+            b'1',
+            54,
+            50,
+            57,
+            52,
+            b'\r',
+            b'\n',
+            XON
         ]
     );
 }

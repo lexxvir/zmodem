@@ -39,24 +39,20 @@ pub fn parse_header<R>(mut r: R) -> io::Result<Option<Frame>>
 where
     R: io::Read,
 {
-    let header = read_byte(&mut r)?;
-
-    match header {
-        ZBIN32 | ZBIN | ZHEX => (),
-        _ => {
-            error!("unexpected header byte!");
-            return Ok(None);
-        }
-    };
+    let encoding = Encoding::try_from(read_byte(&mut r)?)?;
 
     let len = 1 + 4; // frame type + flags
-    let len = if header == ZBIN32 { 4 } else { 2 } + len;
-    let len = if header == ZHEX { len * 2 } else { len };
+    let len = if encoding == Encoding::ZBIN32 { 4 } else { 2 } + len;
+    let len = if encoding == Encoding::ZHEX {
+        len * 2
+    } else {
+        len
+    };
     let mut v: Vec<u8> = vec![0; len];
 
     read_exact_unescaped(r, &mut v)?;
 
-    if header == ZHEX {
+    if encoding == Encoding::ZHEX {
         v = match FromHex::from_hex(&v) {
             Ok(x) => x,
             _ => {
@@ -67,8 +63,8 @@ where
     }
 
     let crc1 = v[5..].to_vec();
-    let crc2 = match header {
-        ZBIN32 => CRC32.checksum(&v[..5]).to_le_bytes().to_vec(),
+    let crc2 = match encoding {
+        Encoding::ZBIN32 => CRC32.checksum(&v[..5]).to_le_bytes().to_vec(),
         _ => CRC16.checksum(&v[..5]).to_be_bytes().to_vec(),
     };
 
@@ -79,7 +75,7 @@ where
 
     let ft_raw: u8 = v[0];
     let ft: Type = Type::try_from(ft_raw)?;
-    let mut frame = Frame::new(header, ft);
+    let mut frame = Frame::new(encoding, ft);
     frame.flags(&[v[1], v[2], v[3], v[4]]);
 
     // if log_enabled!(Debug) {
@@ -111,7 +107,11 @@ where
 /// Receives sequence: <escaped data> ZLDE ZCRC* <CRC bytes>
 /// Unescapes sequencies such as 'ZLDE <escaped byte>'
 /// If Ok returns <unescaped data> in buf and ZCRC* byte as return value
-pub fn recv_zlde_frame<R>(header: u8, r: &mut R, buf: &mut Vec<u8>) -> io::Result<Option<u8>>
+pub fn recv_zlde_frame<R>(
+    encoding: Encoding,
+    r: &mut R,
+    buf: &mut Vec<u8>,
+) -> io::Result<Option<u8>>
 where
     R: io::BufRead,
 {
@@ -127,13 +127,13 @@ where
         *buf.last_mut().unwrap() = unescape(b);
     }
 
-    let crc_len = if header == ZBIN32 { 4 } else { 2 };
+    let crc_len = if encoding == Encoding::ZBIN32 { 4 } else { 2 };
     let mut crc1 = vec![0; crc_len];
 
     read_exact_unescaped(r, &mut crc1)?;
 
-    let crc2 = match header {
-        ZBIN32 => CRC32.checksum(buf).to_le_bytes().to_vec(),
+    let crc2 = match encoding {
+        Encoding::ZBIN32 => CRC32.checksum(buf).to_le_bytes().to_vec(),
         _ => CRC16.checksum(buf).to_be_bytes().to_vec(),
     };
 
@@ -160,7 +160,7 @@ where
     loop {
         buf.clear();
 
-        let zcrc = match recv_zlde_frame(header, rw, &mut buf)? {
+        let zcrc = match recv_zlde_frame(Encoding::try_from(header)?, rw, &mut buf)? {
             Some(x) => x,
             None => return Ok(false),
         };
@@ -227,7 +227,7 @@ where
 {
     debug!("write ZRINIT");
     w.write_all(
-        &Frame::new(ZHEX, Type::ZRINIT)
+        &Frame::new(Encoding::ZHEX, Type::ZRINIT)
             .flags(&[0, 0, 0, 0x23])
             .build(),
     )
@@ -239,7 +239,7 @@ where
     W: io::Write,
 {
     debug!("write ZRQINIT");
-    w.write_all(&Frame::new(ZHEX, Type::ZRQINIT).build())
+    w.write_all(&Frame::new(Encoding::ZHEX, Type::ZRQINIT).build())
 }
 
 /// Writes ZFILE frame
@@ -248,7 +248,7 @@ where
     W: io::Write,
 {
     debug!("write ZFILE");
-    w.write_all(&Frame::new(ZBIN32, Type::ZFILE).build())?;
+    w.write_all(&Frame::new(Encoding::ZBIN32, Type::ZFILE).build())?;
 
     let mut zfile_data = format!("{}\0", filename);
     if let Some(size) = filesize {
@@ -266,7 +266,7 @@ where
     W: io::Write,
 {
     debug!("write ZACK bytes={}", count);
-    w.write_all(&Frame::new(ZHEX, Type::ZACK).count(count).build())
+    w.write_all(&Frame::new(Encoding::ZHEX, Type::ZACK).count(count).build())
 }
 
 /// Writes ZFIN frame
@@ -275,7 +275,7 @@ where
     W: io::Write,
 {
     debug!("write ZFIN");
-    w.write_all(&Frame::new(ZHEX, Type::ZFIN).build())
+    w.write_all(&Frame::new(Encoding::ZHEX, Type::ZFIN).build())
 }
 
 /// Writes ZNAK frame
@@ -284,7 +284,7 @@ where
     W: io::Write,
 {
     debug!("write ZNAK");
-    w.write_all(&Frame::new(ZHEX, Type::ZNAK).build())
+    w.write_all(&Frame::new(Encoding::ZHEX, Type::ZNAK).build())
 }
 
 /// Writes ZRPOS frame
@@ -293,7 +293,7 @@ where
     W: io::Write,
 {
     debug!("write ZRPOS bytes={}", count);
-    w.write_all(&Frame::new(ZHEX, Type::ZRPOS).count(count).build())
+    w.write_all(&Frame::new(Encoding::ZHEX, Type::ZRPOS).count(count).build())
 }
 
 /// Writes ZDATA frame
@@ -302,7 +302,11 @@ where
     W: io::Write,
 {
     debug!("write ZDATA offset={}", offset);
-    w.write_all(&Frame::new(ZBIN32, Type::ZDATA).count(offset).build())
+    w.write_all(
+        &Frame::new(Encoding::ZBIN32, Type::ZDATA)
+            .count(offset)
+            .build(),
+    )
 }
 
 /// Writes ZEOF frame
@@ -311,7 +315,11 @@ where
     W: io::Write,
 {
     debug!("write ZEOF offset={}", offset);
-    w.write_all(&Frame::new(ZBIN32, Type::ZEOF).count(offset).build())
+    w.write_all(
+        &Frame::new(Encoding::ZBIN32, Type::ZEOF)
+            .count(offset)
+            .build(),
+    )
 }
 
 pub fn write_zlde_data<W>(w: &mut W, zcrc_byte: u8, data: &[u8]) -> io::Result<()>
@@ -423,25 +431,45 @@ mod tests {
     #[test]
     fn test_parse_header() {
         let i = [
-            ZHEX, b'0', b'1', b'0', b'1', b'0', b'2', b'0', b'3', b'0', b'4', b'a', b'7', b'5',
+            Encoding::ZHEX as u8,
+            b'0',
+            b'1',
+            b'0',
+            b'1',
+            b'0',
+            b'2',
+            b'0',
+            b'3',
+            b'0',
+            b'4',
+            b'a',
+            b'7',
+            b'5',
             b'2',
         ];
         assert_eq!(
             &mut parse_header(&i[..]).unwrap().unwrap(),
-            Frame::new(ZHEX, Type::ZRINIT).flags(&[0x1, 0x2, 0x3, 0x4])
+            Frame::new(Encoding::ZHEX, Type::ZRINIT).flags(&[0x1, 0x2, 0x3, 0x4])
         );
 
-        let frame = Type::ZRINIT;
-        let i = [ZBIN, frame as u8, 0xa, 0xb, 0xc, 0xd, 0xa6, 0xcb];
+        let i = [
+            Encoding::ZBIN as u8,
+            Type::ZRINIT as u8,
+            0xa,
+            0xb,
+            0xc,
+            0xd,
+            0xa6,
+            0xcb,
+        ];
         assert_eq!(
             &mut parse_header(&i[..]).unwrap().unwrap(),
-            Frame::new(ZBIN, frame).flags(&[0xa, 0xb, 0xc, 0xd])
+            Frame::new(Encoding::ZBIN, Type::ZRINIT).flags(&[0xa, 0xb, 0xc, 0xd])
         );
 
-        let frame = Type::ZRINIT;
         let i = [
-            ZBIN32,
-            frame as u8,
+            Encoding::ZBIN32 as u8,
+            Type::ZRINIT as u8,
             0xa,
             0xb,
             0xc,
@@ -453,13 +481,12 @@ mod tests {
         ];
         assert_eq!(
             &mut parse_header(&i[..]).unwrap().unwrap(),
-            Frame::new(ZBIN32, frame).flags(&[0xa, 0xb, 0xc, 0xd])
+            Frame::new(Encoding::ZBIN32, Type::ZRINIT).flags(&[0xa, 0xb, 0xc, 0xd])
         );
 
-        let frame = Type::ZRINIT;
         let i = [
-            ZBIN,
-            frame as u8,
+            Encoding::ZBIN as u8,
+            Type::ZRINIT as u8,
             0xa,
             ZLDE,
             b'l',
@@ -471,12 +498,12 @@ mod tests {
         ];
         assert_eq!(
             &mut parse_header(&i[..]).unwrap().unwrap(),
-            Frame::new(ZBIN, frame).flags(&[0xa, 0x7f, 0xd, 0xff])
+            Frame::new(Encoding::ZBIN, Type::ZRINIT).flags(&[0xa, 0x7f, 0xd, 0xff])
         );
 
         let frame = Type::ZRINIT;
         let i = [0xaa, frame as u8, 0xa, 0xb, 0xc, 0xd, 0xf, 0xf];
-        assert_eq!(parse_header(&i[..]).unwrap(), None);
+        assert_eq!(parse_header(&i[..]).unwrap_or(None), None);
     }
 
     #[test]
@@ -484,7 +511,7 @@ mod tests {
         let i = vec![ZLDE, ZCRCE, 237, 174];
         let mut v = vec![];
         assert_eq!(
-            recv_zlde_frame(ZBIN, &mut i.as_slice(), &mut v).unwrap(),
+            recv_zlde_frame(Encoding::ZBIN, &mut i.as_slice(), &mut v).unwrap(),
             Some(ZCRCE)
         );
         assert_eq!(&v[..], []);
@@ -492,7 +519,7 @@ mod tests {
         let i = vec![ZLDE, 0x00, ZLDE, ZCRCW, 221, 205];
         let mut v = vec![];
         assert_eq!(
-            recv_zlde_frame(ZBIN, &mut i.as_slice(), &mut v).unwrap(),
+            recv_zlde_frame(Encoding::ZBIN, &mut i.as_slice(), &mut v).unwrap(),
             Some(ZCRCW)
         );
         assert_eq!(&v[..], [0x00]);
@@ -502,7 +529,7 @@ mod tests {
         ];
         let mut v = vec![];
         assert_eq!(
-            recv_zlde_frame(ZBIN32, &mut i.as_slice(), &mut v).unwrap(),
+            recv_zlde_frame(Encoding::ZBIN32, &mut i.as_slice(), &mut v).unwrap(),
             Some(ZCRCQ)
         );
         assert_eq!(&v[..], [0, 1, 2, 3, 4, 0x20, 0x20]);

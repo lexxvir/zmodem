@@ -101,7 +101,7 @@ where
             }
             State::ReceivingData => {
                 if frame.get_count() != count
-                    || !recv_data(frame.encoding(), &mut count, &mut rw_log, &mut w)?
+                    || !recv_data(frame.encoding() as u8, &mut count, &mut rw_log, &mut w)?
                 {
                     write_zrpos(&mut rw_log, count)?;
                 }

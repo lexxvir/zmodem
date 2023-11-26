@@ -8,9 +8,6 @@ pub const CRC32: Crc<u32> = Crc::<u32>::new(&CRC_32_ISO_HDLC);
 pub const ZPAD: u8 = b'*';
 pub const ZLDE: u8 = 0x18;
 pub const ZLDEE: u8 = 0x58;
-pub const ZBIN: u8 = b'A'; // 0x41
-pub const ZHEX: u8 = b'B'; // 0x42
-pub const ZBIN32: u8 = b'C'; // 0x43
 
 pub const ESC_FF: u8 = b'm';
 pub const ESC_7F: u8 = b'l';
