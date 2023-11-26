@@ -129,8 +129,8 @@ where
     read_exact_unescaped(r, &mut crc1)?;
 
     let crc2 = match header {
-        ZBIN32 => get_crc32(buf, None).to_vec(),
-        _ => get_crc16(buf, None).to_vec(),
+        ZBIN32 => CRC32.checksum(buf).to_le_bytes().to_vec(),
+        _ => CRC16.checksum(buf).to_be_bytes().to_vec(),
     };
 
     if crc1 != crc2 {
