@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+//! ZMODEM transfer protocol frame
+
 use consts::*;
 use core::convert::TryFrom;
 use hex::*;
