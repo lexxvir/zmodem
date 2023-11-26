@@ -58,15 +58,17 @@ pub enum FrameType {
 }
 
 impl TryFrom<u8> for FrameType {
+    // TODO: create a frame error type for catching unexpected traffic coming
+    // from the serial port, and use it here.
     type Error = std::io::Error;
 
     fn try_from(value: u8) -> Result<Self, Self::Error> {
-        // TODO: create in-crate error type later on for the sake of `no_std`
-        // compatibility.
         if value >= FRAME_TYPES {
             return Err(ErrorKind::InvalidInput.into());
         }
 
+        // SAFETY: conversion is safe as the range is checked and the enum is
+        // not sparse.
         unsafe { Ok(core::mem::transmute::<u8, FrameType>(value)) }
     }
 }
