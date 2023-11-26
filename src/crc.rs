@@ -12,8 +12,7 @@ pub fn get_crc16(buf: &[u8], maybe_zcrc: Option<u8>) -> [u8; 2] {
         digest.update(&[zcrc]);
     }
 
-    let crc = digest.finalize();
-    [(crc >> 8) as u8, (crc & 0xff) as u8]
+    digest.finalize().to_be_bytes()
 }
 
 pub fn get_crc32(buf: &[u8], maybe_zcrc: Option<u8>) -> [u8; 4] {
@@ -25,11 +24,7 @@ pub fn get_crc32(buf: &[u8], maybe_zcrc: Option<u8>) -> [u8; 4] {
         digest.update(&[zcrc]);
     }
 
-    let crc = digest.finalize();
-    [
-        (crc & 0xff) as u8,
-        (crc >> 8) as u8,
-        (crc >> 16) as u8,
-        (crc >> 24) as u8,
-    ]
+    // Assuming little-endian byte order, given that ZMODEM used to work on
+    // VAX, which was a little-endian computer architecture:
+    digest.finalize().to_le_bytes()
 }
