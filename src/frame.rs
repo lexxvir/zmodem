@@ -5,7 +5,6 @@ use crate::consts::*;
 use crate::proto;
 use crate::zerocopy::AsBytes;
 use core::convert::TryFrom;
-use hex::*;
 use std::fmt::{self, Display};
 
 #[repr(u8)]
@@ -183,16 +182,23 @@ pub fn new_frame(header: &Header, out: &mut Vec<u8>) {
     out.push(ZLDE);
     out.extend_from_slice(header.as_bytes());
 
-    // FIXME: Offsets are defined with magic numbers. Check that the offsets
-    // are indeed correct and clarify their purpose.
+    // Append CRC16 or CRC32 over the frame type and flags:
     out.append(&mut match header.encoding {
         Encoding::ZBIN32 => CRC32.checksum(&out[3..]).to_le_bytes().to_vec(),
         Encoding::ZHEX => CRC16.checksum(&out[4..]).to_be_bytes().to_vec(),
         _ => CRC16.checksum(&out[3..]).to_be_bytes().to_vec(),
     });
 
+    // Substitute binary encoded frame type, flags and the checksum with the
+    // hex encoded versions:
     if header.encoding == Encoding::ZHEX {
-        let hex = out.drain(4..).collect::<Vec<u8>>().to_hex();
+        let hex = out
+            .drain(4..)
+            .collect::<Vec<u8>>()
+            .iter()
+            .map(|b| format!("{:02x}", b).to_string())
+            .collect::<Vec<String>>()
+            .join("");
         out.extend_from_slice(hex.as_bytes());
     }
 
