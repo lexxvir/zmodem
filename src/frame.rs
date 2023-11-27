@@ -138,7 +138,7 @@ union Descriptor {
 }
 
 #[repr(C)]
-#[derive(AsBytes, Clone, Copy, Debug, PartialEq)]
+#[derive(AsBytes, Clone, Copy, Debug)]
 pub struct Header {
     encoding: Encoding,
     frame_type: Type,
