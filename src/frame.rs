@@ -229,10 +229,10 @@ mod tests {
     fn test_header(#[case] encoding: Encoding, #[case] frame_type: Type, #[case] expected: &[u8]) {
         let header = Header::new(encoding, frame_type);
 
-        let mut packet = vec![];
-        new_frame(&header, &mut packet);
+        let mut frame = vec![];
+        new_frame(&header, &mut frame);
 
-        assert_eq!(packet, expected);
+        assert_eq!(frame, expected);
     }
     #[rstest::rstest]
     #[case(Encoding::ZBIN, Type::ZRQINIT, &[1, 1, 1, 1], &[ZPAD, ZLDE, Encoding::ZBIN as u8, 0, 1, 1, 1, 1, 98, 148])]
@@ -245,9 +245,9 @@ mod tests {
     ) {
         let header = Header::new(encoding, frame_type).flags(flags);
 
-        let mut packet = vec![];
-        new_frame(&header, &mut packet);
+        let mut frame = vec![];
+        new_frame(&header, &mut frame);
 
-        assert_eq!(packet, expected);
+        assert_eq!(frame, expected);
     }
 }
