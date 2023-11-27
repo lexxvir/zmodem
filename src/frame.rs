@@ -209,92 +209,35 @@ pub fn new_frame(header: &Header, out: &mut Vec<u8>) {
 mod tests {
     use crate::frame::*;
 
-    #[test]
-    fn test_frame() {
-        let header = Header::new(Encoding::ZBIN, Type::ZRQINIT);
-        let mut out = vec![];
-        new_frame(&header, &mut out);
+    #[rstest::rstest]
+    #[case(Encoding::ZBIN, Type::ZRQINIT, &[ZPAD, ZLDE, Encoding::ZBIN as u8, 0, 0, 0, 0, 0, 0, 0])]
+    #[case(Encoding::ZBIN32, Type::ZRQINIT, &[ZPAD, ZLDE, Encoding::ZBIN32 as u8, 0, 0, 0, 0, 0, 29, 247, 34, 198])]
+    fn test_header(
+        #[case] encoding: Encoding,
+        #[case] frame_type: Type,
+        #[case] expected: &[u8]
+    ) {
+        let header = Header::new(encoding, frame_type);
 
-        assert_eq!(
-            out,
-            vec![ZPAD, ZLDE, Encoding::ZBIN as u8, 0, 0, 0, 0, 0, 0, 0]
-        );
+        let mut packet = vec![];
+        new_frame(&header, &mut packet);
 
-        let header = Header::new(Encoding::ZBIN32, Type::ZRQINIT);
-        let mut out = vec![];
-        new_frame(&header, &mut out);
+        assert_eq!(packet, expected);
+    }
+    #[rstest::rstest]
+    #[case(Encoding::ZBIN, Type::ZRQINIT, &[1, 1, 1, 1], &[ZPAD, ZLDE, Encoding::ZBIN as u8, 0, 1, 1, 1, 1, 98, 148])]
+    #[case(Encoding::ZHEX, Type::ZRQINIT, &[1, 1, 1, 1], &[ZPAD, ZPAD, ZLDE, Encoding::ZHEX as u8, b'0', b'0', b'0', b'1', b'0', b'1', b'0', b'1', b'0', b'1', 54, 50, 57, 52, b'\r', b'\n', XON])]
+    fn test_header_with_flags(
+        #[case] encoding: Encoding,
+        #[case] frame_type: Type,
+        #[case] flags: &[u8; 4],
+        #[case] expected: &[u8]
+    ) {
+        let header = Header::new(encoding, frame_type).flags(flags);
 
-        assert_eq!(
-            out,
-            vec![
-                ZPAD,
-                ZLDE,
-                Encoding::ZBIN32 as u8,
-                0,
-                0,
-                0,
-                0,
-                0,
-                29,
-                247,
-                34,
-                198
-            ]
-        );
+        let mut packet = vec![];
+        new_frame(&header, &mut packet);
 
-        let mut out = vec![];
-        new_frame(
-            &Header::new(Encoding::ZBIN, Type::ZRQINIT).flags(&[1; 4]),
-            &mut out,
-        );
-
-        assert_eq!(
-            out,
-            vec![ZPAD, ZLDE, Encoding::ZBIN as u8, 0, 1, 1, 1, 1, 98, 148]
-        );
-
-        let mut out = vec![];
-        new_frame(
-            &Header::new(Encoding::ZBIN, Type::ZRQINIT).flags(&[1; 4]),
-            &mut out,
-        );
-
-        assert_eq!(
-            out,
-            vec![ZPAD, ZLDE, Encoding::ZBIN as u8, 0, 1, 1, 1, 1, 98, 148]
-        );
-
-        let mut out = vec![];
-        new_frame(
-            &Header::new(Encoding::ZHEX, Type::ZRQINIT).flags(&[1; 4]),
-            &mut out,
-        );
-
-        assert_eq!(
-            out,
-            vec![
-                ZPAD,
-                ZPAD,
-                ZLDE,
-                Encoding::ZHEX as u8,
-                b'0',
-                b'0',
-                b'0',
-                b'1',
-                b'0',
-                b'1',
-                b'0',
-                b'1',
-                b'0',
-                b'1',
-                54,
-                50,
-                57,
-                52,
-                b'\r',
-                b'\n',
-                XON
-            ]
-        );
+        assert_eq!(packet, expected);
     }
 }

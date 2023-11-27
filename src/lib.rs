@@ -1,5 +1,9 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
+#![doc = include_str!("../README.md")]
+#![cfg(not(test))]
+#![deny(clippy::all)]
+
 #[macro_use]
 extern crate log;
 
