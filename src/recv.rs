@@ -3,8 +3,8 @@ use std::str::from_utf8;
 use std::{thread, time};
 
 use crate::frame::*;
+use crate::port;
 use crate::proto::*;
-use crate::rwlog;
 
 #[derive(Debug, PartialEq)]
 enum State {
@@ -57,22 +57,22 @@ where
     RW: Read + Write,
     W: Write,
 {
-    let mut rw_log = rwlog::ReadWriteLog::new(rw);
+    let mut port = port::Port::new(rw);
     let mut count = 0;
 
     let mut state = State::new();
 
-    write_zrinit(&mut rw_log)?;
+    write_zrinit(&mut port)?;
 
     while state != State::Done {
-        if !find_zpad(&mut rw_log)? {
+        if !find_zpad(&mut port)? {
             continue;
         }
 
-        let frame = match parse_header(&mut rw_log)? {
+        let frame = match parse_header(&mut port)? {
             Some(x) => x,
             None => {
-                recv_error(&mut rw_log, &state, count)?;
+                recv_error(&mut port, &state, count)?;
                 continue;
             }
         };
@@ -83,15 +83,15 @@ where
         // do things according new state
         match state {
             State::SendingZRINIT => {
-                write_zrinit(&mut rw_log)?;
+                write_zrinit(&mut port)?;
             }
             State::ProcessingZFILE => {
                 let mut buf = Vec::new();
 
-                if recv_zlde_frame(frame.encoding(), &mut rw_log, &mut buf)?.is_none() {
-                    write_znak(&mut rw_log)?;
+                if recv_zlde_frame(frame.encoding(), &mut port, &mut buf)?.is_none() {
+                    write_znak(&mut port)?;
                 } else {
-                    write_zrpos(&mut rw_log, count)?;
+                    write_zrpos(&mut port, count)?;
 
                     // TODO: process supplied data
                     if let Ok(s) = from_utf8(&buf) {
@@ -101,9 +101,9 @@ where
             }
             State::ReceivingData => {
                 if frame.get_count() != count
-                    || !recv_data(frame.encoding() as u8, &mut count, &mut rw_log, &mut w)?
+                    || !recv_data(frame.encoding() as u8, &mut count, &mut port, &mut w)?
                 {
-                    write_zrpos(&mut rw_log, count)?;
+                    write_zrpos(&mut port, count)?;
                 }
             }
             State::CheckingData => {
@@ -115,11 +115,11 @@ where
                     );
                     // receiver ignores the ZEOF because a new zdata is coming
                 } else {
-                    write_zrinit(&mut rw_log)?;
+                    write_zrinit(&mut port)?;
                 }
             }
             State::Done => {
-                write_zfin(&mut rw_log)?;
+                write_zfin(&mut port)?;
                 thread::sleep(time::Duration::from_millis(10)); // sleep a bit
             }
         }
