@@ -3,36 +3,33 @@
 use core::convert::TryFrom;
 use hex::*;
 use log::LogLevel::Debug;
-use std::io;
+use std::io::{self, BufRead, ErrorKind};
 
 use crate::consts::*;
 use crate::frame::{escape_u8_array, new_frame, Encoding, Header, Type};
 
-/// Looking for sequence: ZPAD [ZPAD] ZLDE
-/// Returns true if found otherwise false
-pub fn find_zpad<R>(r: &mut R) -> io::Result<bool>
+/// Skips (ZPAD, [ZPAD,] ZLDE) sequence
+pub fn try_skip_zpad<P>(port: &mut P) -> io::Result<bool>
 where
-    R: io::Read,
+    P: BufRead,
 {
-    // looking for first ZPAD
-    if read_byte(r)? != ZPAD {
+    let mut read_buf = [0; 1];
+
+    let mut value = port.read_exact(&mut read_buf).map(|_| read_buf[0])?;
+    if value != ZPAD {
         return Ok(false);
     }
 
-    // get next byte
-    let mut b = read_byte(r)?;
-
-    // skip second ZPAD
-    if b == ZPAD {
-        b = read_byte(r)?;
+    value = port.read_exact(&mut read_buf).map(|_| read_buf[0])?;
+    if value == ZPAD {
+        value = port.read_exact(&mut read_buf).map(|_| read_buf[0])?;
     }
 
-    // expect ZLDE
-    if b != ZLDE {
-        return Ok(false);
+    if value == ZLDE {
+        Ok(true)
+    } else {
+        Err(ErrorKind::InvalidData.into())
     }
-
-    Ok(true)
 }
 
 pub fn parse_header<R>(mut r: R) -> io::Result<Option<Header>>
@@ -435,21 +432,21 @@ mod tests {
     use crate::proto::*;
 
     #[test]
-    fn test_find_zpad() {
+    fn test_try_skip_zpad() {
         let v = vec![ZPAD, ZLDE];
-        assert!(find_zpad(&mut v.as_slice()).unwrap());
+        assert!(try_skip_zpad(&mut v.as_slice()).unwrap());
 
         let v = vec![ZPAD, ZPAD, ZLDE];
-        assert!(find_zpad(&mut v.as_slice()).unwrap());
+        assert!(try_skip_zpad(&mut v.as_slice()).unwrap());
 
         let v = vec![ZLDE];
-        assert!(!find_zpad(&mut v.as_slice()).unwrap());
+        assert!(!try_skip_zpad(&mut v.as_slice()).unwrap());
 
         let v = vec![];
-        assert!(find_zpad(&mut v.as_slice()).is_err());
+        assert!(try_skip_zpad(&mut v.as_slice()).is_err());
 
         let v = vec![0; 100];
-        assert!(!find_zpad(&mut v.as_slice()).unwrap());
+        assert!(!try_skip_zpad(&mut v.as_slice()).unwrap());
     }
 
     #[test]

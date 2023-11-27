@@ -82,7 +82,7 @@ where
     while state != State::Done {
         port.flush()?;
 
-        if !find_zpad(&mut port)? {
+        if !try_skip_zpad(&mut port)? {
             continue;
         }
 
