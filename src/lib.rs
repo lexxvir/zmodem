@@ -13,6 +13,7 @@ extern crate hex;
 extern crate hexdump;
 extern crate strum;
 extern crate strum_macros;
+extern crate zerocopy;
 
 mod consts;
 mod frame;

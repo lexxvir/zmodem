@@ -3,7 +3,8 @@
 
 use crate::consts::*;
 use crate::proto;
-use core::{convert::TryFrom, mem::size_of, slice::from_raw_parts};
+use crate::zerocopy::AsBytes;
+use core::convert::TryFrom;
 use hex::*;
 use std::fmt::{self, Display};
 use strum::IntoEnumIterator;
@@ -11,7 +12,7 @@ use strum_macros::EnumIter;
 
 #[repr(u8)]
 #[allow(dead_code, clippy::upper_case_acronyms)]
-#[derive(Clone, Copy, Debug, EnumIter, PartialEq)]
+#[derive(AsBytes, Clone, Copy, Debug, EnumIter, PartialEq)]
 /// The ZMODEM frame type
 pub enum Encoding {
     ZBIN = 0x41,
@@ -42,7 +43,7 @@ impl Display for Encoding {
 
 #[repr(u8)]
 #[allow(dead_code, clippy::upper_case_acronyms)]
-#[derive(Clone, Copy, Debug, EnumIter, PartialEq)]
+#[derive(AsBytes, Clone, Copy, Debug, EnumIter, PartialEq)]
 /// The ZMODEM frame type
 pub enum Type {
     /// Request receive init
@@ -115,20 +116,12 @@ union Descriptor {
     count: u32,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[repr(C)]
+#[derive(AsBytes, Clone, Copy, Debug, PartialEq)]
 pub struct Header {
     encoding: Encoding,
     frame_type: Type,
     flags: [u8; 4],
-}
-
-impl<'a> From<&'a Header> for &'a [u8] {
-    fn from(value: &Header) -> Self {
-        // SAFETY:
-        // * Out-of-boundary: limited by size of the header
-        // * Use-after-free: same life-time parameter
-        unsafe { from_raw_parts((value as *const _) as *const u8, size_of::<Header>()) }
-    }
 }
 
 impl Header {
@@ -176,7 +169,7 @@ pub fn new_frame(header: &Header, out: &mut Vec<u8>) {
     }
 
     out.push(ZLDE);
-    out.extend_from_slice(header.into());
+    out.extend_from_slice(header.as_bytes());
 
     // FIXME: Offsets are defined with magic numbers. Check that the offsets
     // are indeed correct and clarify their purpose.
@@ -212,11 +205,7 @@ mod tests {
     #[rstest::rstest]
     #[case(Encoding::ZBIN, Type::ZRQINIT, &[ZPAD, ZLDE, Encoding::ZBIN as u8, 0, 0, 0, 0, 0, 0, 0])]
     #[case(Encoding::ZBIN32, Type::ZRQINIT, &[ZPAD, ZLDE, Encoding::ZBIN32 as u8, 0, 0, 0, 0, 0, 29, 247, 34, 198])]
-    fn test_header(
-        #[case] encoding: Encoding,
-        #[case] frame_type: Type,
-        #[case] expected: &[u8]
-    ) {
+    fn test_header(#[case] encoding: Encoding, #[case] frame_type: Type, #[case] expected: &[u8]) {
         let header = Header::new(encoding, frame_type);
 
         let mut packet = vec![];
@@ -231,7 +220,7 @@ mod tests {
         #[case] encoding: Encoding,
         #[case] frame_type: Type,
         #[case] flags: &[u8; 4],
-        #[case] expected: &[u8]
+        #[case] expected: &[u8],
     ) {
         let header = Header::new(encoding, frame_type).flags(flags);
 

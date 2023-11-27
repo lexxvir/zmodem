@@ -16,6 +16,7 @@ log = "0.3.7"
 rstest = "0.18.2"
 strum = { version = "0.25.0", features = ["strum_macros"] }
 strum_macros = "0.25.3"
+zerocopy = { version = "0.7.26", features = ["derive"] }
 
 [dev-dependencies]
 lazy_static = "1"
