@@ -6,7 +6,7 @@ use log::LogLevel::Debug;
 use std::io;
 
 use consts::*;
-use frame::*;
+use frame::{new_frame, Encoding, Header, Type};
 
 /// Looking for sequence: ZPAD [ZPAD] ZLDE
 /// Returns true if found otherwise false
@@ -246,12 +246,14 @@ pub fn write_zrinit<W>(w: &mut W) -> io::Result<()>
 where
     W: io::Write,
 {
-    debug!("write ZRINIT");
-    w.write_all(
-        &Header::new(Encoding::ZHEX, Type::ZRINIT)
-            .flags(&[0, 0, 0, 0x23])
-            .build(),
-    )
+    log::trace!("ZRINIT");
+
+    let mut out = vec![];
+    new_frame(
+        &Header::new(Encoding::ZHEX, Type::ZRINIT).flags(&[0, 0, 0, 0x23]),
+        &mut out,
+    );
+    w.write_all(&out)
 }
 
 /// Writes ZRQINIT frame
@@ -259,8 +261,14 @@ pub fn write_zrqinit<W>(w: &mut W) -> io::Result<()>
 where
     W: io::Write,
 {
-    debug!("write ZRQINIT");
-    w.write_all(&Header::new(Encoding::ZHEX, Type::ZRQINIT).build())
+    log::trace!("ZRQINIT");
+
+    let mut out = vec![];
+    new_frame(
+        &Header::new(Encoding::ZHEX, Type::ZRQINIT).flags(&[0, 0, 0, 0x23]),
+        &mut out,
+    );
+    w.write_all(&out)
 }
 
 /// Writes ZFILE frame
@@ -268,8 +276,14 @@ pub fn write_zfile<W>(w: &mut W, filename: &str, filesize: Option<u32>) -> io::R
 where
     W: io::Write,
 {
-    debug!("write ZFILE");
-    w.write_all(&Header::new(Encoding::ZBIN32, Type::ZFILE).build())?;
+    log::trace!("ZFILE");
+
+    let mut out = vec![];
+    new_frame(
+        &Header::new(Encoding::ZBIN32, Type::ZFILE).flags(&[0, 0, 0, 0x23]),
+        &mut out,
+    );
+    w.write_all(&out)?;
 
     let mut zfile_data = format!("{}\0", filename);
     if let Some(size) = filesize {
@@ -277,7 +291,6 @@ where
     }
     zfile_data += "\0";
 
-    debug!("ZFILE supplied data: {}", zfile_data);
     write_zlde_data(w, ZCRCW, zfile_data.as_bytes())
 }
 
@@ -286,8 +299,15 @@ pub fn write_zack<W>(w: &mut W, count: u32) -> io::Result<()>
 where
     W: io::Write,
 {
-    debug!("write ZACK bytes={}", count);
-    w.write_all(&Header::new(Encoding::ZHEX, Type::ZACK).count(count).build())
+    log::trace!("ZACK {}", count);
+
+    let mut out = vec![];
+    new_frame(
+        &Header::new(Encoding::ZHEX, Type::ZACK).count(count),
+        &mut out,
+    );
+
+    w.write_all(&out)
 }
 
 /// Writes ZFIN frame
@@ -295,8 +315,12 @@ pub fn write_zfin<W>(w: &mut W) -> io::Result<()>
 where
     W: io::Write,
 {
-    debug!("write ZFIN");
-    w.write_all(&Header::new(Encoding::ZHEX, Type::ZFIN).build())
+    log::trace!("ZFIN");
+
+    let mut out = vec![];
+    new_frame(&Header::new(Encoding::ZHEX, Type::ZFIN), &mut out);
+
+    w.write_all(&out)
 }
 
 /// Writes ZNAK frame
@@ -304,8 +328,12 @@ pub fn write_znak<W>(w: &mut W) -> io::Result<()>
 where
     W: io::Write,
 {
-    debug!("write ZNAK");
-    w.write_all(&Header::new(Encoding::ZHEX, Type::ZNAK).build())
+    log::trace!("ZNAK");
+
+    let mut out = vec![];
+    new_frame(&Header::new(Encoding::ZHEX, Type::ZNAK), &mut out);
+
+    w.write_all(&out)
 }
 
 /// Writes ZRPOS frame
@@ -313,12 +341,15 @@ pub fn write_zrpos<W>(w: &mut W, count: u32) -> io::Result<()>
 where
     W: io::Write,
 {
-    debug!("write ZRPOS bytes={}", count);
-    w.write_all(
-        &Header::new(Encoding::ZHEX, Type::ZRPOS)
-            .count(count)
-            .build(),
-    )
+    log::trace!("ZRPOS {}", count);
+
+    let mut out = vec![];
+    new_frame(
+        &Header::new(Encoding::ZHEX, Type::ZRPOS).count(count),
+        &mut out,
+    );
+
+    w.write_all(&out)
 }
 
 /// Writes ZDATA frame
@@ -326,12 +357,15 @@ pub fn write_zdata<W>(w: &mut W, offset: u32) -> io::Result<()>
 where
     W: io::Write,
 {
-    debug!("write ZDATA offset={}", offset);
-    w.write_all(
-        &Header::new(Encoding::ZBIN32, Type::ZDATA)
-            .count(offset)
-            .build(),
-    )
+    log::trace!("ZDATA {}", offset);
+
+    let mut out = vec![];
+    new_frame(
+        &Header::new(Encoding::ZBIN32, Type::ZDATA).count(offset),
+        &mut out,
+    );
+
+    w.write_all(&out)
 }
 
 /// Writes ZEOF frame
@@ -339,12 +373,15 @@ pub fn write_zeof<W>(w: &mut W, offset: u32) -> io::Result<()>
 where
     W: io::Write,
 {
-    debug!("write ZEOF offset={}", offset);
-    w.write_all(
-        &Header::new(Encoding::ZBIN32, Type::ZEOF)
-            .count(offset)
-            .build(),
-    )
+    log::trace!("ZEOF {}", offset);
+
+    let mut out = vec![];
+    new_frame(
+        &Header::new(Encoding::ZBIN32, Type::ZEOF).count(offset),
+        &mut out,
+    );
+
+    w.write_all(&out)
 }
 
 pub fn write_zlde_data<W>(w: &mut W, zcrc_byte: u8, data: &[u8]) -> io::Result<()>
@@ -474,7 +511,7 @@ mod tests {
         ];
         assert_eq!(
             &mut parse_header(&i[..]).unwrap().unwrap(),
-            Header::new(Encoding::ZHEX, Type::ZRINIT).flags(&[0x1, 0x2, 0x3, 0x4])
+            &Header::new(Encoding::ZHEX, Type::ZRINIT).flags(&[0x1, 0x2, 0x3, 0x4])
         );
 
         let i = [
@@ -489,7 +526,7 @@ mod tests {
         ];
         assert_eq!(
             &mut parse_header(&i[..]).unwrap().unwrap(),
-            Header::new(Encoding::ZBIN, Type::ZRINIT).flags(&[0xa, 0xb, 0xc, 0xd])
+            &Header::new(Encoding::ZBIN, Type::ZRINIT).flags(&[0xa, 0xb, 0xc, 0xd])
         );
 
         let i = [
@@ -506,7 +543,7 @@ mod tests {
         ];
         assert_eq!(
             &mut parse_header(&i[..]).unwrap().unwrap(),
-            Header::new(Encoding::ZBIN32, Type::ZRINIT).flags(&[0xa, 0xb, 0xc, 0xd])
+            &Header::new(Encoding::ZBIN32, Type::ZRINIT).flags(&[0xa, 0xb, 0xc, 0xd])
         );
 
         let i = [
@@ -523,7 +560,7 @@ mod tests {
         ];
         assert_eq!(
             &mut parse_header(&i[..]).unwrap().unwrap(),
-            Header::new(Encoding::ZBIN, Type::ZRINIT).flags(&[0xa, 0x7f, 0xd, 0xff])
+            &Header::new(Encoding::ZBIN, Type::ZRINIT).flags(&[0xa, 0x7f, 0xd, 0xff])
         );
 
         let frame = Type::ZRINIT;

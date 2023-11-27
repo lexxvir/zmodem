@@ -108,18 +108,19 @@ impl Display for Type {
     }
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Header {
     encoding: Encoding,
     frame_type: Type,
     flags: [u8; 4],
 }
 
-impl From<&Header> for &[u8] {
+impl<'a> From<&'a Header> for &'a [u8] {
     fn from(value: &Header) -> Self {
-        // SAFETY: out-of-boundary is not possible, given that the size constraint
-        // exists in the struct definition.
-        unsafe { from_raw_parts((value as *const Header) as *const u8, size_of::<Header>()) }
+        // SAFETY:
+        // * Out-of-boundary: limited by size of the header
+        // * Use-after-free: same life-time parameter
+        unsafe { from_raw_parts((value as *const _) as *const u8, size_of::<Header>()) }
     }
 }
 
@@ -132,66 +133,18 @@ impl Header {
         }
     }
 
-    pub fn flags<'b>(&'b mut self, flags: &[u8; 4]) -> &'b mut Header {
+    pub fn flags(&mut self, flags: &[u8; 4]) -> Header {
         self.flags = *flags;
-        self
+        *self
     }
 
-    pub fn count(&mut self, count: u32) -> &mut Header {
-        self.flags = [
-            count as u8,
-            (count >> 8) as u8,
-            (count >> 16) as u8,
-            (count >> 24) as u8,
-        ];
-        self
+    pub fn count(&mut self, count: u32) -> Header {
+        self.flags = count.to_le_bytes();
+        *self
     }
 
     pub fn get_count(&self) -> u32 {
-        (self.flags[3] as u32) << 24
-            | (self.flags[2] as u32) << 16
-            | (self.flags[1] as u32) << 8
-            | (self.flags[0] as u32)
-    }
-
-    pub fn build(&self) -> Vec<u8> {
-        let mut out = Vec::new();
-
-        out.push(ZPAD);
-        if self.encoding == Encoding::ZHEX {
-            out.push(ZPAD);
-        }
-
-        out.push(ZLDE);
-        out.extend_from_slice(self.into());
-
-        // FIXME: Offsets are defined with magic numbers. Check that the offsets
-        // are indeed correct and clarify their purpose.
-        out.append(&mut match self.encoding {
-            Encoding::ZBIN32 => CRC32.checksum(&out[3..]).to_le_bytes().to_vec(),
-            Encoding::ZHEX => CRC16.checksum(&out[4..]).to_be_bytes().to_vec(),
-            _ => CRC16.checksum(&out[3..]).to_be_bytes().to_vec(),
-        });
-
-        if self.encoding == Encoding::ZHEX {
-            let hex = out.drain(4..).collect::<Vec<u8>>().to_hex();
-            out.extend_from_slice(hex.as_bytes());
-        }
-
-        let tmp = out.drain(3..).collect::<Vec<_>>();
-        let mut tmp2 = Vec::new();
-        proto::escape_buf(&tmp, &mut tmp2);
-        out.extend_from_slice(&tmp2);
-
-        if self.encoding == Encoding::ZHEX {
-            out.extend_from_slice(b"\r\n");
-
-            if self.frame_type != Type::ZACK && self.frame_type != Type::ZFIN {
-                out.push(XON);
-            }
-        }
-
-        out
+        u32::from_le_bytes(self.flags)
     }
 
     pub fn frame_type(&self) -> Type {
@@ -209,15 +162,59 @@ impl fmt::Display for Header {
     }
 }
 
+pub fn new_frame(header: &Header, out: &mut Vec<u8>) {
+    out.push(ZPAD);
+    if header.encoding == Encoding::ZHEX {
+        out.push(ZPAD);
+    }
+
+    out.push(ZLDE);
+    out.extend_from_slice(header.into());
+
+    // FIXME: Offsets are defined with magic numbers. Check that the offsets
+    // are indeed correct and clarify their purpose.
+    out.append(&mut match header.encoding {
+        Encoding::ZBIN32 => CRC32.checksum(&out[3..]).to_le_bytes().to_vec(),
+        Encoding::ZHEX => CRC16.checksum(&out[4..]).to_be_bytes().to_vec(),
+        _ => CRC16.checksum(&out[3..]).to_be_bytes().to_vec(),
+    });
+
+    if header.encoding == Encoding::ZHEX {
+        let hex = out.drain(4..).collect::<Vec<u8>>().to_hex();
+        out.extend_from_slice(hex.as_bytes());
+    }
+
+    let tmp = out.drain(3..).collect::<Vec<_>>();
+    let mut tmp2 = Vec::new();
+    proto::escape_buf(&tmp, &mut tmp2);
+    out.extend_from_slice(&tmp2);
+
+    if header.encoding == Encoding::ZHEX {
+        out.extend_from_slice(b"\r\n");
+
+        if header.frame_type != Type::ZACK && header.frame_type != Type::ZFIN {
+            out.push(XON);
+        }
+    }
+}
+
 #[test]
 fn test_frame() {
+    let header = Header::new(Encoding::ZBIN, Type::ZRQINIT);
+    let mut out = vec![];
+    new_frame(&header, &mut out);
+
     assert_eq!(
-        Header::new(Encoding::ZBIN, Type::ZRQINIT).build(),
+        out,
         vec![ZPAD, ZLDE, Encoding::ZBIN as u8, 0, 0, 0, 0, 0, 0, 0]
     );
 
+    let header = Header::new(Encoding::ZBIN32, Type::ZRQINIT);
+    let mut out = vec![];
+    new_frame(&header, &mut out);
+
     assert_eq!(
-        Header::new(Encoding::ZBIN32, Type::ZRQINIT).build(),
+        out,
         vec![
             ZPAD,
             ZLDE,
@@ -234,24 +231,36 @@ fn test_frame() {
         ]
     );
 
-    assert_eq!(
-        Header::new(Encoding::ZBIN, Type::ZRQINIT)
-            .flags(&[1; 4])
-            .build(),
-        vec![ZPAD, ZLDE, Encoding::ZBIN as u8, 0, 1, 1, 1, 1, 98, 148]
+    let mut out = vec![];
+    new_frame(
+        &Header::new(Encoding::ZBIN, Type::ZRQINIT).flags(&[1; 4]),
+        &mut out,
     );
 
     assert_eq!(
-        Header::new(Encoding::ZBIN, Type::ZRQINIT)
-            .flags(&[1; 4])
-            .build(),
+        out,
         vec![ZPAD, ZLDE, Encoding::ZBIN as u8, 0, 1, 1, 1, 1, 98, 148]
     );
 
+    let mut out = vec![];
+    new_frame(
+        &Header::new(Encoding::ZBIN, Type::ZRQINIT).flags(&[1; 4]),
+        &mut out,
+    );
+
     assert_eq!(
-        Header::new(Encoding::ZHEX, Type::ZRQINIT)
-            .flags(&[1; 4])
-            .build(),
+        out,
+        vec![ZPAD, ZLDE, Encoding::ZBIN as u8, 0, 1, 1, 1, 1, 98, 148]
+    );
+
+    let mut out = vec![];
+    new_frame(
+        &Header::new(Encoding::ZHEX, Type::ZRQINIT).flags(&[1; 4]),
+        &mut out,
+    );
+
+    assert_eq!(
+        out,
         vec![
             ZPAD,
             ZPAD,
