@@ -11,7 +11,7 @@ use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 
 #[repr(u8)]
-#[allow(dead_code, clippy::upper_case_acronyms)]
+#[allow(clippy::upper_case_acronyms)]
 #[derive(AsBytes, Clone, Copy, Debug, EnumIter, PartialEq)]
 /// The ZMODEM frame type
 pub enum Encoding {
@@ -42,7 +42,7 @@ impl Display for Encoding {
 }
 
 #[repr(u8)]
-#[allow(dead_code, clippy::upper_case_acronyms)]
+#[allow(clippy::upper_case_acronyms)]
 #[derive(AsBytes, Clone, Copy, Debug, EnumIter, PartialEq)]
 /// The ZMODEM frame type
 pub enum Type {
