@@ -1,7 +1,5 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-use hexdump::*;
-use log::LogLevel::*;
 use std::io::*;
 
 pub struct ReadWriteLog<RW> {
@@ -19,14 +17,6 @@ impl<RW: Read + Write> ReadWriteLog<RW> {
 impl<R: Read> Read for ReadWriteLog<R> {
     fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
         let r = self.inner.read(buf)?;
-
-        if log_enabled!(Debug) {
-            debug!("In:");
-            for x in hexdump_iter(&buf[..r]) {
-                debug!("{}", x);
-            }
-        }
-
         Ok(r)
     }
 }
@@ -34,14 +24,6 @@ impl<R: Read> Read for ReadWriteLog<R> {
 impl<R: Read> BufRead for ReadWriteLog<R> {
     fn fill_buf(&mut self) -> Result<&[u8]> {
         let r = self.inner.fill_buf()?;
-
-        if log_enabled!(Debug) {
-            debug!("In:");
-            for x in hexdump_iter(r) {
-                debug!("{}", x);
-            }
-        }
-
         Ok(r)
     }
 
@@ -52,13 +34,6 @@ impl<R: Read> BufRead for ReadWriteLog<R> {
 
 impl<RW: Write + Read> Write for ReadWriteLog<RW> {
     fn write(&mut self, buf: &[u8]) -> Result<usize> {
-        if log_enabled!(Debug) {
-            debug!("Out:");
-            for x in hexdump_iter(buf) {
-                debug!("{}", x);
-            }
-        }
-
         self.inner.get_mut().write(buf)
     }
 
