@@ -131,13 +131,6 @@ impl Display for Type {
 }
 
 #[repr(C)]
-#[allow(dead_code)]
-union Descriptor {
-    flags: [u8; 4],
-    count: u32,
-}
-
-#[repr(C)]
 #[derive(AsBytes, Clone, Copy, Debug)]
 pub struct Header {
     encoding: Encoding,
@@ -146,22 +139,20 @@ pub struct Header {
 }
 
 impl Header {
-    pub fn new(encoding: Encoding, frame_type: Type) -> Header {
+    pub fn new(encoding: Encoding, frame_type: Type, flags: &[u8; 4]) -> Header {
         Header {
             encoding,
             frame_type,
-            flags: [0; 4],
+            flags: *flags,
         }
     }
 
-    pub fn flags(&mut self, flags: &[u8; 4]) -> Header {
-        self.flags = *flags;
-        *self
-    }
-
-    pub fn count(&mut self, count: u32) -> Header {
-        self.flags = count.to_le_bytes();
-        *self
+    pub fn new_count(encoding: Encoding, frame_type: Type, count: u32) -> Header {
+        Header {
+            encoding,
+            frame_type,
+            flags: count.to_le_bytes(),
+        }
     }
 
     pub fn get_count(&self) -> u32 {
@@ -227,7 +218,7 @@ mod tests {
     #[case(Encoding::ZBIN, Type::ZRQINIT, &[ZPAD, ZLDE, Encoding::ZBIN as u8, 0, 0, 0, 0, 0, 0, 0])]
     #[case(Encoding::ZBIN32, Type::ZRQINIT, &[ZPAD, ZLDE, Encoding::ZBIN32 as u8, 0, 0, 0, 0, 0, 29, 247, 34, 198])]
     fn test_header(#[case] encoding: Encoding, #[case] frame_type: Type, #[case] expected: &[u8]) {
-        let header = Header::new(encoding, frame_type);
+        let header = Header::new(encoding, frame_type, &[0; 4]);
 
         let mut frame = vec![];
         new_frame(&header, &mut frame);
@@ -243,7 +234,7 @@ mod tests {
         #[case] flags: &[u8; 4],
         #[case] expected: &[u8],
     ) {
-        let header = Header::new(encoding, frame_type).flags(flags);
+        let header = Header::new(encoding, frame_type, flags);
 
         let mut frame = vec![];
         new_frame(&header, &mut frame);

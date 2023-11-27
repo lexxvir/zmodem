@@ -89,18 +89,9 @@ where
         Err(_) => return Ok(None),
     };
 
-    let mut frame = Header::new(encoding, ft);
-    frame.flags(&[v[1], v[2], v[3], v[4]]);
-
-    if log_enabled!(Debug) {
-        debug!("Got frame: {}", frame);
-        match frame.frame_type() {
-            Type::ZACK | Type::ZRPOS => debug!("  offset = {}", frame.get_count()),
-            _ => (),
-        }
-    }
-
-    Ok(Some(frame))
+    let header = Header::new(encoding, ft, &[v[1], v[2], v[3], v[4]]);
+    log::trace!("FRAME {}", header);
+    Ok(Some(header))
 }
 
 /// Read out up to len bytes and remove escaped ones
@@ -250,7 +241,7 @@ where
 
     let mut out = vec![];
     new_frame(
-        &Header::new(Encoding::ZHEX, Type::ZRINIT).flags(&[0, 0, 0, 0x23]),
+        &Header::new(Encoding::ZHEX, Type::ZRINIT, &[0, 0, 0, 0x23]),
         &mut out,
     );
     w.write_all(&out)
@@ -265,7 +256,7 @@ where
 
     let mut out = vec![];
     new_frame(
-        &Header::new(Encoding::ZHEX, Type::ZRQINIT).flags(&[0, 0, 0, 0x23]),
+        &Header::new(Encoding::ZHEX, Type::ZRQINIT, &[0, 0, 0, 0x23]),
         &mut out,
     );
     w.write_all(&out)
@@ -280,7 +271,7 @@ where
 
     let mut out = vec![];
     new_frame(
-        &Header::new(Encoding::ZBIN32, Type::ZFILE).flags(&[0, 0, 0, 0x23]),
+        &Header::new(Encoding::ZBIN32, Type::ZFILE, &[0, 0, 0, 0x23]),
         &mut out,
     );
     w.write_all(&out)?;
@@ -303,7 +294,7 @@ where
 
     let mut out = vec![];
     new_frame(
-        &Header::new(Encoding::ZHEX, Type::ZACK).count(count),
+        &Header::new_count(Encoding::ZHEX, Type::ZACK, count),
         &mut out,
     );
 
@@ -318,7 +309,7 @@ where
     log::trace!("ZFIN");
 
     let mut out = vec![];
-    new_frame(&Header::new(Encoding::ZHEX, Type::ZFIN), &mut out);
+    new_frame(&Header::new(Encoding::ZHEX, Type::ZFIN, &[0; 4]), &mut out);
 
     w.write_all(&out)
 }
@@ -331,7 +322,7 @@ where
     log::trace!("ZNAK");
 
     let mut out = vec![];
-    new_frame(&Header::new(Encoding::ZHEX, Type::ZNAK), &mut out);
+    new_frame(&Header::new(Encoding::ZHEX, Type::ZNAK, &[0; 4]), &mut out);
 
     w.write_all(&out)
 }
@@ -345,7 +336,7 @@ where
 
     let mut out = vec![];
     new_frame(
-        &Header::new(Encoding::ZHEX, Type::ZRPOS).count(count),
+        &Header::new_count(Encoding::ZHEX, Type::ZRPOS, count),
         &mut out,
     );
 
@@ -361,7 +352,7 @@ where
 
     let mut out = vec![];
     new_frame(
-        &Header::new(Encoding::ZBIN32, Type::ZDATA).count(offset),
+        &Header::new_count(Encoding::ZBIN32, Type::ZDATA, offset),
         &mut out,
     );
 
@@ -377,7 +368,7 @@ where
 
     let mut out = vec![];
     new_frame(
-        &Header::new(Encoding::ZBIN32, Type::ZEOF).count(offset),
+        &Header::new_count(Encoding::ZBIN32, Type::ZEOF, offset),
         &mut out,
     );
 
