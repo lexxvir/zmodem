@@ -11,7 +11,7 @@ use strum_macros::EnumIter;
 
 #[repr(u8)]
 #[allow(dead_code, clippy::upper_case_acronyms)]
-#[derive(Clone, Copy, Debug, EnumIter, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, EnumIter, PartialEq)]
 /// The ZMODEM frame type
 pub enum Encoding {
     ZBIN = 0x41,
@@ -42,7 +42,7 @@ impl Display for Encoding {
 
 #[repr(u8)]
 #[allow(dead_code, clippy::upper_case_acronyms)]
-#[derive(Clone, Copy, Debug, EnumIter, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, EnumIter, PartialEq)]
 /// The ZMODEM frame type
 pub enum Type {
     /// Request receive init
@@ -108,7 +108,14 @@ impl Display for Type {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(C)]
+#[allow(dead_code)]
+union Descriptor {
+    flags: [u8; 4],
+    count: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Header {
     encoding: Encoding,
     frame_type: Type,
