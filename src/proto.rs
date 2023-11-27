@@ -6,7 +6,7 @@ use log::LogLevel::Debug;
 use std::io;
 
 use crate::consts::*;
-use crate::frame::{new_frame, Encoding, Header, Type};
+use crate::frame::{escape_u8_array, new_frame, Encoding, Header, Type};
 
 /// Looking for sequence: ZPAD [ZPAD] ZLDE
 /// Returns true if found otherwise false
@@ -414,7 +414,7 @@ where
     //let mut w = io::BufWriter::new(w);
 
     let mut esc_data = Vec::with_capacity(data.len() + data.len() / 10);
-    escape_buf(data, &mut esc_data);
+    escape_u8_array(data, &mut esc_data);
     w.write_all(&esc_data)
 }
 
@@ -424,18 +424,6 @@ where
     W: io::Write,
 {
     w.write_all("OO".as_bytes())
-}
-
-pub fn escape_buf(src: &[u8], dst: &mut Vec<u8>) {
-    for x in src {
-        match *x {
-            0xFF => dst.extend_from_slice(&[ZLDE, ESC_FF]),
-            0x7F => dst.extend_from_slice(&[ZLDE, ESC_7F]),
-            0x10 | 0x90 | 0x11 | 0x91 | 0x13 | 0x93 => dst.extend_from_slice(&[ZLDE, x ^ 0x40]),
-            ZLDE => dst.extend_from_slice(&[ZLDE, ZLDEE]),
-            x => dst.push(x),
-        };
-    }
 }
 
 #[cfg(test)]

@@ -2,7 +2,6 @@
 //! ZMODEM transfer protocol frame
 
 use crate::consts::*;
-use crate::proto;
 use crate::zerocopy::AsBytes;
 use core::convert::TryFrom;
 use std::fmt::{self, Display};
@@ -129,6 +128,26 @@ impl Display for Type {
     }
 }
 
+pub fn escape_u8(value: u8) -> Option<[u8; 2]> {
+    Some(match value {
+        0xFF => [ZLDE, ESC_FF],
+        0x7F => [ZLDE, ESC_7F],
+        0x10 | 0x90 | 0x11 | 0x91 | 0x13 | 0x93 => [ZLDE, value ^ 0x40],
+        ZLDE => [ZLDE, ZLDEE],
+        _ => return None,
+    })
+}
+
+pub fn escape_u8_array(src: &[u8], dst: &mut Vec<u8>) {
+    for value in src {
+        if let Some(value) = escape_u8(*value) {
+            dst.extend_from_slice(&value);
+        } else {
+            dst.push(*value);
+        }
+    }
+}
+
 #[repr(C)]
 #[derive(AsBytes, Clone, Copy, Debug)]
 pub struct Header {
@@ -202,12 +221,10 @@ pub fn new_frame(header: &Header, out: &mut Vec<u8>) {
         out.extend_from_slice(hex.as_bytes());
     }
 
-    let tmp = out.drain(3..).collect::<Vec<_>>();
-    let mut tmp2 = Vec::new();
-    proto::escape_buf(&tmp, &mut tmp2);
-    out.extend_from_slice(&tmp2);
+    escape_u8_array(&out.drain(3..).collect::<Vec<_>>(), out);
 
     if header.encoding == Encoding::ZHEX {
+        // Add trailing CRLF for ZHEX transfer:
         out.extend_from_slice(b"\r\n");
 
         if header.frame_type != Type::ZACK && header.frame_type != Type::ZFIN {
