@@ -2,9 +2,9 @@ use std::io::{Read, Result, Write};
 use std::str::from_utf8;
 use std::{thread, time};
 
-use frame::*;
-use proto::*;
-use rwlog;
+use crate::frame::*;
+use crate::proto::*;
+use crate::rwlog;
 
 #[derive(Debug, PartialEq)]
 enum State {

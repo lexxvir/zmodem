@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //! ZMODEM transfer protocol frame
 
-use consts::*;
+use crate::consts::*;
+use crate::proto;
 use core::{convert::TryFrom, mem::size_of, slice::from_raw_parts};
 use hex::*;
-use proto;
 use std::fmt::{self, Display};
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
@@ -198,91 +198,96 @@ pub fn new_frame(header: &Header, out: &mut Vec<u8>) {
     }
 }
 
-#[test]
-fn test_frame() {
-    let header = Header::new(Encoding::ZBIN, Type::ZRQINIT);
-    let mut out = vec![];
-    new_frame(&header, &mut out);
+#[cfg(test)]
+mod tests {
+    use crate::frame::*;
 
-    assert_eq!(
-        out,
-        vec![ZPAD, ZLDE, Encoding::ZBIN as u8, 0, 0, 0, 0, 0, 0, 0]
-    );
+    #[test]
+    fn test_frame() {
+        let header = Header::new(Encoding::ZBIN, Type::ZRQINIT);
+        let mut out = vec![];
+        new_frame(&header, &mut out);
 
-    let header = Header::new(Encoding::ZBIN32, Type::ZRQINIT);
-    let mut out = vec![];
-    new_frame(&header, &mut out);
+        assert_eq!(
+            out,
+            vec![ZPAD, ZLDE, Encoding::ZBIN as u8, 0, 0, 0, 0, 0, 0, 0]
+        );
 
-    assert_eq!(
-        out,
-        vec![
-            ZPAD,
-            ZLDE,
-            Encoding::ZBIN32 as u8,
-            0,
-            0,
-            0,
-            0,
-            0,
-            29,
-            247,
-            34,
-            198
-        ]
-    );
+        let header = Header::new(Encoding::ZBIN32, Type::ZRQINIT);
+        let mut out = vec![];
+        new_frame(&header, &mut out);
 
-    let mut out = vec![];
-    new_frame(
-        &Header::new(Encoding::ZBIN, Type::ZRQINIT).flags(&[1; 4]),
-        &mut out,
-    );
+        assert_eq!(
+            out,
+            vec![
+                ZPAD,
+                ZLDE,
+                Encoding::ZBIN32 as u8,
+                0,
+                0,
+                0,
+                0,
+                0,
+                29,
+                247,
+                34,
+                198
+            ]
+        );
 
-    assert_eq!(
-        out,
-        vec![ZPAD, ZLDE, Encoding::ZBIN as u8, 0, 1, 1, 1, 1, 98, 148]
-    );
+        let mut out = vec![];
+        new_frame(
+            &Header::new(Encoding::ZBIN, Type::ZRQINIT).flags(&[1; 4]),
+            &mut out,
+        );
 
-    let mut out = vec![];
-    new_frame(
-        &Header::new(Encoding::ZBIN, Type::ZRQINIT).flags(&[1; 4]),
-        &mut out,
-    );
+        assert_eq!(
+            out,
+            vec![ZPAD, ZLDE, Encoding::ZBIN as u8, 0, 1, 1, 1, 1, 98, 148]
+        );
 
-    assert_eq!(
-        out,
-        vec![ZPAD, ZLDE, Encoding::ZBIN as u8, 0, 1, 1, 1, 1, 98, 148]
-    );
+        let mut out = vec![];
+        new_frame(
+            &Header::new(Encoding::ZBIN, Type::ZRQINIT).flags(&[1; 4]),
+            &mut out,
+        );
 
-    let mut out = vec![];
-    new_frame(
-        &Header::new(Encoding::ZHEX, Type::ZRQINIT).flags(&[1; 4]),
-        &mut out,
-    );
+        assert_eq!(
+            out,
+            vec![ZPAD, ZLDE, Encoding::ZBIN as u8, 0, 1, 1, 1, 1, 98, 148]
+        );
 
-    assert_eq!(
-        out,
-        vec![
-            ZPAD,
-            ZPAD,
-            ZLDE,
-            Encoding::ZHEX as u8,
-            b'0',
-            b'0',
-            b'0',
-            b'1',
-            b'0',
-            b'1',
-            b'0',
-            b'1',
-            b'0',
-            b'1',
-            54,
-            50,
-            57,
-            52,
-            b'\r',
-            b'\n',
-            XON
-        ]
-    );
+        let mut out = vec![];
+        new_frame(
+            &Header::new(Encoding::ZHEX, Type::ZRQINIT).flags(&[1; 4]),
+            &mut out,
+        );
+
+        assert_eq!(
+            out,
+            vec![
+                ZPAD,
+                ZPAD,
+                ZLDE,
+                Encoding::ZHEX as u8,
+                b'0',
+                b'0',
+                b'0',
+                b'1',
+                b'0',
+                b'1',
+                b'0',
+                b'1',
+                b'0',
+                b'1',
+                54,
+                50,
+                57,
+                52,
+                b'\r',
+                b'\n',
+                XON
+            ]
+        );
+    }
 }

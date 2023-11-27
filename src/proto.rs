@@ -5,8 +5,8 @@ use hex::*;
 use log::LogLevel::Debug;
 use std::io;
 
-use consts::*;
-use frame::{new_frame, Encoding, Header, Type};
+use crate::consts::*;
+use crate::frame::{new_frame, Encoding, Header, Type};
 
 /// Looking for sequence: ZPAD [ZPAD] ZLDE
 /// Returns true if found otherwise false
@@ -447,12 +447,13 @@ pub fn escape_buf(src: &[u8], dst: &mut Vec<u8>) {
     }
 }
 
+#[cfg(test)]
 mod tests {
     #![allow(unused_imports)]
 
-    use super::*;
-    use consts::*;
-    use frame::*;
+    use crate::consts::*;
+    use crate::frame::*;
+    use crate::proto::*;
 
     #[test]
     fn test_find_zpad() {
