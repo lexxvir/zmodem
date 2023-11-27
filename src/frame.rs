@@ -7,18 +7,18 @@ use crate::zerocopy::AsBytes;
 use core::convert::TryFrom;
 use hex::*;
 use std::fmt::{self, Display};
-use strum::IntoEnumIterator;
-use strum_macros::EnumIter;
 
 #[repr(u8)]
 #[allow(clippy::upper_case_acronyms)]
-#[derive(AsBytes, Clone, Copy, Debug, EnumIter, PartialEq)]
+#[derive(AsBytes, Clone, Copy, Debug, PartialEq)]
 /// The ZMODEM frame type
 pub enum Encoding {
     ZBIN = 0x41,
     ZHEX = 0x42,
     ZBIN32 = 0x43,
 }
+
+const ENCODINGS: &[Encoding] = &[Encoding::ZBIN, Encoding::ZHEX, Encoding::ZBIN32];
 
 #[derive(Clone, Copy, Debug)]
 pub struct InvalidEncoding;
@@ -27,11 +27,10 @@ impl TryFrom<u8> for Encoding {
     type Error = InvalidEncoding;
 
     fn try_from(value: u8) -> Result<Self, Self::Error> {
-        if let Some(e) = Encoding::iter().find(|e| value == *e as u8) {
-            Ok(e)
-        } else {
-            Err(InvalidEncoding)
-        }
+        ENCODINGS
+            .iter()
+            .find(|e| value == **e as u8)
+            .map_or(Err(InvalidEncoding), |e| Ok(*e))
     }
 }
 
@@ -43,7 +42,7 @@ impl Display for Encoding {
 
 #[repr(u8)]
 #[allow(clippy::upper_case_acronyms)]
-#[derive(AsBytes, Clone, Copy, Debug, EnumIter, PartialEq)]
+#[derive(AsBytes, Clone, Copy, Debug, PartialEq)]
 /// The ZMODEM frame type
 pub enum Type {
     /// Request receive init
@@ -88,6 +87,29 @@ pub enum Type {
     ZSTDERR = 19,
 }
 
+const TYPES: &[Type] = &[
+    Type::ZRQINIT,
+    Type::ZRINIT,
+    Type::ZSINIT,
+    Type::ZACK,
+    Type::ZFILE,
+    Type::ZSKIP,
+    Type::ZNAK,
+    Type::ZABORT,
+    Type::ZFIN,
+    Type::ZRPOS,
+    Type::ZDATA,
+    Type::ZEOF,
+    Type::ZFERR,
+    Type::ZCRC,
+    Type::ZCHALLENGE,
+    Type::ZCOMPL,
+    Type::ZCAN,
+    Type::ZFREECNT,
+    Type::ZCOMMAND,
+    Type::ZSTDERR,
+];
+
 #[derive(Clone, Copy, Debug)]
 pub struct InvalidType;
 
@@ -95,11 +117,10 @@ impl TryFrom<u8> for Type {
     type Error = InvalidType;
 
     fn try_from(value: u8) -> Result<Self, Self::Error> {
-        if let Some(e) = Type::iter().find(|e| value == *e as u8) {
-            Ok(e)
-        } else {
-            Err(InvalidType)
-        }
+        TYPES
+            .iter()
+            .find(|t| value == **t as u8)
+            .map_or(Err(InvalidType), |t| Ok(*t))
     }
 }
 

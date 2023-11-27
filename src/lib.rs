@@ -10,8 +10,6 @@ extern crate log;
 extern crate core;
 extern crate crc;
 extern crate hex;
-extern crate strum;
-extern crate strum_macros;
 extern crate zerocopy;
 
 mod consts;
