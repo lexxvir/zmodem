@@ -5,7 +5,7 @@ use std::io::{Read, Result, Seek, SeekFrom, Write};
 use crate::consts::*;
 use crate::frame::*;
 use crate::port;
-use crate::proto::*;
+use log::LogLevel::Debug;
 
 const SUBPACKET_SIZE: usize = 1024 * 8;
 const SUBPACKET_PER_ACK: usize = 10;
@@ -65,7 +65,7 @@ impl State {
     }
 }
 
-/// Send a file using the ZMODEM file transfer protocol.
+/// Sends a file using the ZMODEM file transfer protocol.
 pub fn send<RW, R>(rw: RW, r: &mut R, filename: &str, filesize: Option<u32>) -> Result<()>
 where
     RW: Read + Write,
@@ -83,11 +83,11 @@ where
     while state != State::Done {
         port.flush()?;
 
-        if !try_skip_zpad(&mut port)? {
+        if !crate::try_skip_zpad(&mut port)? {
             continue;
         }
 
-        let frame = match parse_header(&mut port)? {
+        let frame = match crate::parse_header(&mut port)? {
             Some(x) => x,
             None => {
                 port.write_all(&Frame::new(&ZNAK_HEADER).0)?;
@@ -103,7 +103,12 @@ where
             State::SendingZRQINIT => port.write_all(&Frame::new(&ZRQINIT_HEADER).0)?,
             State::SendingZFILE => {
                 port.write_all(&Frame::new(&ZFILE_HEADER).0)?;
-                write_zfile_data(&mut port, filename, filesize)?;
+                let mut zfile_data = format!("{}\0", filename);
+                if let Some(size) = filesize {
+                    zfile_data += &format!(" {}", size);
+                }
+                zfile_data += "\0";
+                write_zlde_data(&mut port, ZCRCW, zfile_data.as_bytes())?;
             }
             State::SendingData => {
                 offset = frame.count();
@@ -144,4 +149,45 @@ where
     }
 
     Ok(())
+}
+
+fn write_zlde_data<W>(w: &mut W, zcrc_byte: u8, data: &[u8]) -> Result<()>
+where
+    W: Write,
+{
+    if log_enabled!(Debug) {
+        debug!(
+            "  ZCRC{} subpacket, size = {}",
+            match zcrc_byte {
+                ZCRCE => "E",
+                ZCRCG => "G",
+                ZCRCQ => "Q",
+                ZCRCW => "W",
+                _ => "?",
+            },
+            data.len()
+        );
+    }
+
+    let mut digest = CRC32.digest();
+    digest.update(data);
+    digest.update(&[zcrc_byte]);
+    // Assuming little-endian byte order, given that ZMODEM used to work on
+    // VAX, which was a little-endian computer architecture:
+    let crc = digest.finalize().to_le_bytes();
+
+    write_escape(w, data)?;
+    w.write_all(&[ZLDE, zcrc_byte])?;
+    write_escape(w, &crc)?;
+
+    Ok(())
+}
+
+fn write_escape<W>(w: &mut W, data: &[u8]) -> Result<()>
+where
+    W: Write,
+{
+    let mut esc_data = Vec::with_capacity(data.len() + data.len() / 10);
+    crate::escape_array(data, &mut esc_data);
+    w.write_all(&esc_data)
 }

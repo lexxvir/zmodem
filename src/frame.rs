@@ -203,7 +203,7 @@ impl Frame {
         }
 
         let mut escaped = vec![];
-        crate::escape_u8_array(&out[3..], &mut escaped);
+        crate::escape_array(&out[3..], &mut escaped);
         out.truncate(3);
         out.extend_from_slice(escaped.as_bytes());
 

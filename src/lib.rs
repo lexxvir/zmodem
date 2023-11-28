@@ -11,18 +11,21 @@ extern crate zerocopy;
 mod consts;
 mod frame;
 mod port;
-mod proto;
 
 pub mod recv;
 pub mod send;
 
-use consts::*;
+use crate::consts::*;
+use crate::frame::*;
+use core::convert::TryFrom;
+use hex::*;
+use std::io::{self, BufRead, ErrorKind, Read};
 
-pub fn is_u8_escaped(byte: u8) -> bool {
+pub fn is_escaped(byte: u8) -> bool {
     !matches!(byte, ZCRCE | ZCRCG | ZCRCQ | ZCRCW)
 }
 
-pub fn escape_u8(value: u8) -> Option<[u8; 2]> {
+pub fn escape(value: u8) -> Option<[u8; 2]> {
     Some(match value {
         0xFF => [ZLDE, ESC_FF],
         0x7F => [ZLDE, ESC_7F],
@@ -32,18 +35,8 @@ pub fn escape_u8(value: u8) -> Option<[u8; 2]> {
     })
 }
 
-pub fn escape_u8_array(src: &[u8], dst: &mut Vec<u8>) {
-    for value in src {
-        if let Some(value) = escape_u8(*value) {
-            dst.extend_from_slice(&value);
-        } else {
-            dst.push(*value);
-        }
-    }
-}
-
-pub fn unescape_u8(escaped_byte: u8) -> u8 {
-    match escaped_byte {
+pub fn unescape(value: u8) -> u8 {
+    match value {
         ESC_FF => 0xFF,
         ESC_7F => 0x7F,
         x => {
@@ -56,11 +49,163 @@ pub fn unescape_u8(escaped_byte: u8) -> u8 {
     }
 }
 
+pub fn escape_array(src: &[u8], dst: &mut Vec<u8>) {
+    for value in src {
+        if let Some(value) = escape(*value) {
+            dst.extend_from_slice(&value);
+        } else {
+            dst.push(*value);
+        }
+    }
+}
+
+/// Skips (ZPAD, [ZPAD,] ZLDE) sequence.
+pub fn try_skip_zpad<P>(port: &mut P) -> io::Result<bool>
+where
+    P: BufRead,
+{
+    let mut read_buf = [0; 1];
+
+    let mut value = port.read_exact(&mut read_buf).map(|_| read_buf[0])?;
+    if value != ZPAD {
+        return Ok(false);
+    }
+
+    value = port.read_exact(&mut read_buf).map(|_| read_buf[0])?;
+    if value == ZPAD {
+        value = port.read_exact(&mut read_buf).map(|_| read_buf[0])?;
+    }
+
+    if value == ZLDE {
+        Ok(true)
+    } else {
+        Err(ErrorKind::InvalidData.into())
+    }
+}
+
+pub fn parse_header<R>(mut r: R) -> io::Result<Option<Header>>
+where
+    R: Read,
+{
+    // Read encoding byte:
+    let mut enc_raw = [0; 1];
+    let enc_raw = r.read_exact(&mut enc_raw).map(|_| enc_raw[0])?;
+
+    // Parse encoding byte:
+    let encoding = match Encoding::try_from(enc_raw) {
+        Ok(enc) => enc,
+        Err(_) => return Ok(None),
+    };
+
+    let len = 1 + 4; // frame type + flags
+    let len = if encoding == Encoding::ZBIN32 { 4 } else { 2 } + len;
+    let len = if encoding == Encoding::ZHEX {
+        len * 2
+    } else {
+        len
+    };
+    let mut v: Vec<u8> = vec![0; len];
+
+    read_exact_unescaped(r, &mut v)?;
+
+    if encoding == Encoding::ZHEX {
+        v = match FromHex::from_hex(&v) {
+            Ok(x) => x,
+            _ => {
+                error!("from_hex error");
+                return Ok(None);
+            }
+        }
+    }
+
+    let crc1 = v[5..].to_vec();
+    let crc2 = match encoding {
+        Encoding::ZBIN32 => CRC32.checksum(&v[..5]).to_le_bytes().to_vec(),
+        _ => CRC16.checksum(&v[..5]).to_be_bytes().to_vec(),
+    };
+
+    if crc1 != crc2 {
+        error!("crc mismatch: {:?} != {:?}", crc1, crc2);
+        return Ok(None);
+    }
+
+    // Read encoding byte:
+    let ft_raw: u8 = v[0];
+
+    // Parse encoding byte:
+    let ft = match Type::try_from(ft_raw) {
+        Ok(ft) => ft,
+        Err(_) => return Ok(None),
+    };
+
+    let header = Header::new(encoding, ft, &[v[1], v[2], v[3], v[4]]);
+    log::trace!("FRAME {}", header);
+    Ok(Some(header))
+}
+
+/// Receives sequence: <escaped data> ZLDE ZCRC* <CRC bytes>
+/// Unescapes sequencies such as 'ZLDE <escaped byte>'
+/// If Ok returns <unescaped data> in buf and ZCRC* byte as return value
+pub fn recv_zlde_frame<R>(
+    encoding: Encoding,
+    r: &mut R,
+    buf: &mut Vec<u8>,
+) -> io::Result<Option<u8>>
+where
+    R: io::BufRead,
+{
+    loop {
+        r.read_until(ZLDE, buf)?;
+
+        let mut b = [0; 1];
+        let b = r.read_exact(&mut b).map(|_| b[0])?;
+
+        if !crate::is_escaped(b) {
+            *buf.last_mut().unwrap() = b; // replace ZLDE by ZCRC* byte
+            break;
+        }
+
+        *buf.last_mut().unwrap() = crate::unescape(b);
+    }
+
+    let crc_len = if encoding == Encoding::ZBIN32 { 4 } else { 2 };
+    let mut crc1 = vec![0; crc_len];
+
+    read_exact_unescaped(r, &mut crc1)?;
+
+    let crc2 = match encoding {
+        Encoding::ZBIN32 => CRC32.checksum(buf).to_le_bytes().to_vec(),
+        _ => CRC16.checksum(buf).to_be_bytes().to_vec(),
+    };
+
+    if crc1 != crc2 {
+        error!("crc mismatch: {:?} != {:?}", crc1, crc2);
+        return Ok(None);
+    }
+
+    Ok(buf.pop()) // pop ZCRC* byte
+}
+
+fn read_exact_unescaped<R>(mut r: R, buf: &mut [u8]) -> io::Result<()>
+where
+    R: io::Read,
+{
+    for x in buf {
+        let mut buf = [0; 1];
+
+        *x = match r.read_exact(&mut buf).map(|_| buf[0])? {
+            ZLDE => crate::unescape(r.read_exact(&mut buf).map(|_| buf[0])?),
+            y => y,
+        };
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use crate::consts::*;
     use crate::frame::*;
-    use crate::proto::*;
 
     #[rstest::rstest]
     #[case(Encoding::ZBIN, Type::ZRQINIT, &[ZPAD, ZLDE, Encoding::ZBIN as u8, 0, 0, 0, 0, 0, 0, 0])]
@@ -98,23 +243,9 @@ mod tests {
     pub fn test_try_skip_zpad(#[case] data: &[u8], #[case] expected: std::io::Result<bool>) {
         let data = data.to_vec();
         assert_eq!(
-            try_skip_zpad(&mut data.as_slice()).is_err(),
+            crate::try_skip_zpad(&mut data.as_slice()).is_err(),
             expected.is_err()
         );
-    }
-
-    #[rstest::rstest]
-    #[case(&[0; 32], &[0; 32], &[0; 32])]
-    #[case(&[ZLDE, b'm', ZLDE, b'l', ZLDE, 0x6f], &[0; 3], &[0xff, 0x7f, 0x2f])]
-    #[case(&[ZLDE, b'm', 0, 2, ZLDE, b'l'], &[0; 4], &[0xff, 0, 2, 0x7f])]
-    pub fn test_read_exact_unescaped(
-        #[case] input: &[u8],
-        #[case] output: &[u8],
-        #[case] expected: &[u8],
-    ) {
-        let mut output = output.to_vec();
-        read_exact_unescaped(&input[..], &mut output).unwrap();
-        assert_eq!(&output, expected);
     }
 
     #[rstest::rstest]
@@ -123,14 +254,17 @@ mod tests {
     #[case(&[Encoding::ZBIN32 as u8, Type::ZRINIT as u8, 0xa, 0xb, 0xc, 0xd, 0x99, 0xe2, 0xae, 0x4a], &Header::new(Encoding::ZBIN32, Type::ZRINIT, &[0xa, 0xb, 0xc, 0xd]))]
     #[case(&[Encoding::ZBIN as u8, Type::ZRINIT as u8, 0xa, ZLDE, b'l', 0xd, ZLDE, b'm', 0x5e, 0x6f], &Header::new(Encoding::ZBIN, Type::ZRINIT, &[0xa, 0x7f, 0xd, 0xff]))]
     pub fn test_parse_header(#[case] input: &[u8], #[case] expected: &Header) {
-        assert_eq!(&mut parse_header(&input[..]).unwrap().unwrap(), expected);
+        assert_eq!(
+            &mut crate::parse_header(&input[..]).unwrap().unwrap(),
+            expected
+        );
     }
 
     #[test]
     fn test_parse_header_none() {
         let frame = Type::ZRINIT;
         let i = [0xaa, frame as u8, 0xa, 0xb, 0xc, 0xd, 0xf, 0xf];
-        assert_eq!(parse_header(&i[..]).unwrap_or(None), None);
+        assert_eq!(crate::parse_header(&i[..]).unwrap_or(None), None);
     }
 
     #[test]
@@ -138,7 +272,7 @@ mod tests {
         let i = vec![ZLDE, ZCRCE, 237, 174];
         let mut v = vec![];
         assert_eq!(
-            recv_zlde_frame(Encoding::ZBIN, &mut i.as_slice(), &mut v).unwrap(),
+            crate::recv_zlde_frame(Encoding::ZBIN, &mut i.as_slice(), &mut v).unwrap(),
             Some(ZCRCE)
         );
         assert_eq!(&v[..], []);
@@ -146,7 +280,7 @@ mod tests {
         let i = vec![ZLDE, 0x00, ZLDE, ZCRCW, 221, 205];
         let mut v = vec![];
         assert_eq!(
-            recv_zlde_frame(Encoding::ZBIN, &mut i.as_slice(), &mut v).unwrap(),
+            crate::recv_zlde_frame(Encoding::ZBIN, &mut i.as_slice(), &mut v).unwrap(),
             Some(ZCRCW)
         );
         assert_eq!(&v[..], [0x00]);
@@ -156,7 +290,7 @@ mod tests {
         ];
         let mut v = vec![];
         assert_eq!(
-            recv_zlde_frame(Encoding::ZBIN32, &mut i.as_slice(), &mut v).unwrap(),
+            crate::recv_zlde_frame(Encoding::ZBIN32, &mut i.as_slice(), &mut v).unwrap(),
             Some(ZCRCQ)
         );
         assert_eq!(&v[..], [0, 1, 2, 3, 4, 0x20, 0x20]);

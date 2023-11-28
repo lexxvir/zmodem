@@ -1,11 +1,10 @@
-use std::io::{Read, Result, Write};
+use std::io::{BufRead, Read, Result, Write};
 use std::str::from_utf8;
 use std::{thread, time};
 
 use crate::consts::*;
 use crate::frame::*;
 use crate::port;
-use crate::proto::*;
 
 #[derive(Debug, PartialEq)]
 enum State {
@@ -52,6 +51,54 @@ impl State {
     }
 }
 
+fn recv_data<RW, OUT>(enc_raw: u8, count: &mut u32, rw: &mut RW, out: &mut OUT) -> Result<bool>
+where
+    RW: Write + BufRead,
+    OUT: Write,
+{
+    let mut buf = Vec::new();
+
+    loop {
+        buf.clear();
+
+        // Parse encoding byte:
+        let encoding = match Encoding::try_from(enc_raw) {
+            Ok(enc) => enc,
+            Err(_) => return Ok(false),
+        };
+
+        // Read and parse ZLDE frame:
+        let zcrc = match crate::recv_zlde_frame(encoding, rw, &mut buf)? {
+            Some(x) => x,
+            None => return Ok(false),
+        };
+
+        out.write_all(&buf)?;
+        *count += buf.len() as u32;
+
+        match zcrc {
+            ZCRCW => {
+                let frame = Frame::new(&ZACK_HEADER.with_count(*count));
+                rw.write_all(&frame.0)?;
+                return Ok(true);
+            }
+            ZCRCE => {
+                return Ok(true);
+            }
+            ZCRCQ => {
+                let frame = Frame::new(&ZACK_HEADER.with_count(*count));
+                rw.write_all(&frame.0)?;
+            }
+            ZCRCG => {
+                log::debug!("ZCRCG");
+            }
+            _ => {
+                panic!("unexpected ZCRC byte: {:02X}", zcrc);
+            }
+        }
+    }
+}
+
 /// Receives a file using the ZMODEM file transfer protocol.
 pub fn recv<RW, W>(rw: RW, mut w: W) -> Result<usize>
 where
@@ -66,11 +113,11 @@ where
     port.write_all(&Frame::new(&ZRINIT_HEADER).0)?;
 
     while state != State::Done {
-        if !try_skip_zpad(&mut port)? {
+        if !crate::try_skip_zpad(&mut port)? {
             continue;
         }
 
-        let frame = match parse_header(&mut port)? {
+        let frame = match crate::parse_header(&mut port)? {
             Some(x) => x,
             None => {
                 match state {
@@ -94,7 +141,7 @@ where
             State::ProcessingZFILE => {
                 let mut buf = Vec::new();
 
-                if recv_zlde_frame(frame.encoding(), &mut port, &mut buf)?.is_none() {
+                if crate::recv_zlde_frame(frame.encoding(), &mut port, &mut buf)?.is_none() {
                     port.write_all(&Frame::new(&ZNAK_HEADER).0)?;
                 } else {
                     port.write_all(&Frame::new(&ZRPOS_HEADER.with_count(count)).0)?;
