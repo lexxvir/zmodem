@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 use crate::{
-    frame::{Frame, Type},
-    port, ZCRCG, ZCRCW, ZDATA_HEADER, ZEOF_HEADER, ZFILE_HEADER, ZFIN_HEADER, ZNAK_HEADER,
-    ZRQINIT_HEADER,
+    frame::{Frame, Header, Type},
+    port, write_zdle_data, ZCRCG, ZCRCW, ZDATA_HEADER, ZEOF_HEADER, ZFILE_HEADER, ZFIN_HEADER,
+    ZNAK_HEADER, ZRQINIT_HEADER,
 };
 use std::io::{Read, Result, Seek, SeekFrom, Write};
 
@@ -33,13 +33,9 @@ where
     R: Read + Seek,
 {
     let mut port = port::Port::new(rw);
-
-    let mut data = [0; SUBPACKET_SIZE];
-    let mut offset: u32;
+    let mut state = None;
 
     port.write_all(&Frame::new(&ZRQINIT_HEADER).0)?;
-
-    let mut state = None;
 
     loop {
         port.flush()?;
@@ -62,46 +58,8 @@ where
         // do things according new state
         match state {
             Some(Type::ZRQINIT) => port.write_all(&Frame::new(&ZRQINIT_HEADER).0)?,
-            Some(Type::ZFILE) => {
-                port.write_all(&Frame::new(&ZFILE_HEADER).0)?;
-                let mut zfile_data = format!("{}\0", filename);
-                if let Some(size) = filesize {
-                    zfile_data += &format!(" {}", size);
-                }
-                zfile_data += "\0";
-                crate::write_zdle_data(&mut port, ZCRCW, zfile_data.as_bytes())?;
-            }
-            Some(Type::ZDATA) => {
-                offset = frame.count();
-                r.seek(SeekFrom::Start(offset as u64))?;
-
-                let num = r.read(&mut data)?;
-
-                if num == 0 {
-                    port.write_all(&Frame::new(&ZEOF_HEADER.with_count(offset)).0)?;
-                } else {
-                    // ZBIN32|ZDATA
-                    // ZCRCG - best perf
-                    // ZCRCQ - mid perf
-                    // ZCRCW - worst perf
-                    // ZCRCE - send at end
-                    port.write_all(&Frame::new(&ZDATA_HEADER.with_count(offset)).0)?;
-
-                    let mut i = 0;
-                    loop {
-                        i += 1;
-
-                        crate::write_zdle_data(&mut port, ZCRCG, &data[..num])?;
-                        offset += num as u32;
-
-                        let num = r.read(&mut data)?;
-                        if num < data.len() || i >= SUBPACKET_PER_ACK {
-                            crate::write_zdle_data(&mut port, ZCRCW, &data[..num])?;
-                            break;
-                        }
-                    }
-                }
-            }
+            Some(Type::ZFILE) => write_zfile(&mut port, filename, filesize)?,
+            Some(Type::ZDATA) => write_zdata(&mut port, r, &frame)?,
             Some(Type::ZFIN) => port.write_all(&Frame::new(&ZFIN_HEADER).0)?,
             // Write "over and out" (OO):
             None => {
@@ -112,5 +70,55 @@ where
         }
     }
 
+    Ok(())
+}
+
+/// Sends a ZFILE packet containing file's name and size.
+fn write_zfile<P>(port: &mut P, name: &str, maybe_size: Option<u32>) -> Result<()>
+where
+    P: Read + Write,
+{
+    port.write_all(&Frame::new(&ZFILE_HEADER).0)?;
+
+    let mut data = format!("{}\0", name);
+    if let Some(size) = maybe_size {
+        data += &format!(" {}", size);
+    }
+    data += "\0";
+
+    write_zdle_data(port, ZCRCW, data.as_bytes())
+}
+
+/// Write a ZDATA packet from the given file offset in the ZBIN32 format.
+fn write_zdata<P, F>(port: &mut P, file: &mut F, header: &Header) -> Result<()>
+where
+    P: Read + Write,
+    F: Read + Seek,
+{
+    let mut data = [0; SUBPACKET_SIZE];
+    let mut offset: u32 = header.count();
+
+    file.seek(SeekFrom::Start(offset as u64))?;
+
+    let mut count = file.read(&mut data)?;
+
+    if count == 0 {
+        port.write_all(&Frame::new(&ZEOF_HEADER.with_count(offset)).0)?;
+        return Ok(());
+    }
+
+    port.write_all(&Frame::new(&ZDATA_HEADER.with_count(offset)).0)?;
+
+    for _ in 1..SUBPACKET_PER_ACK {
+        write_zdle_data(port, ZCRCG, &data[..count])?;
+        offset += count as u32;
+
+        count = file.read(&mut data)?;
+        if count < SUBPACKET_SIZE {
+            break;
+        }
+    }
+
+    write_zdle_data(port, ZCRCW, &data[..count])?;
     Ok(())
 }
