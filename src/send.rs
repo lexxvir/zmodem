@@ -106,24 +106,20 @@ where
                 write_zfile_data(&mut port, filename, filesize)?;
             }
             State::SendingData => {
-                offset = frame.get_count();
+                offset = frame.count();
                 r.seek(SeekFrom::Start(offset as u64))?;
 
                 let num = r.read(&mut data)?;
 
                 if num == 0 {
-                    port.write_all(
-                        &Frame::new(&Header::new_count(Encoding::ZBIN32, Type::ZEOF, offset)).0,
-                    )?;
+                    port.write_all(&Frame::new(&ZEOF_HEADER.with_count(offset)).0)?;
                 } else {
                     // ZBIN32|ZDATA
                     // ZCRCG - best perf
                     // ZCRCQ - mid perf
                     // ZCRCW - worst perf
                     // ZCRCE - send at end
-                    port.write_all(
-                        &Frame::new(&Header::new_count(Encoding::ZBIN32, Type::ZDATA, offset)).0,
-                    )?;
+                    port.write_all(&Frame::new(&ZDATA_HEADER.with_count(offset)).0)?;
 
                     let mut i = 0;
                     loop {
@@ -141,7 +137,8 @@ where
                 }
             }
             State::SendingZFIN => port.write_all(&Frame::new(&ZFIN_HEADER).0)?,
-            State::Done => write_over_and_out(&mut port)?,
+            // Write "over and out" (OO):
+            State::Done => port.write_all("OO".as_bytes())?,
             _ => (),
         }
     }

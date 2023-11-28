@@ -145,24 +145,24 @@ impl Header {
         }
     }
 
-    pub fn new_count(encoding: Encoding, frame_type: Type, count: u32) -> Header {
+    pub const fn with_count(&self, count: u32) -> Self {
         Header {
-            encoding,
-            frame_type,
+            encoding: self.encoding,
+            frame_type: self.frame_type,
             flags: count.to_le_bytes(),
         }
     }
 
-    pub fn get_count(&self) -> u32 {
-        u32::from_le_bytes(self.flags)
+    pub const fn encoding(&self) -> Encoding {
+        self.encoding
     }
 
-    pub fn frame_type(&self) -> Type {
+    pub const fn frame_type(&self) -> Type {
         self.frame_type
     }
 
-    pub fn encoding(&self) -> Encoding {
-        self.encoding
+    pub const fn count(&self) -> u32 {
+        u32::from_le_bytes(self.flags)
     }
 }
 

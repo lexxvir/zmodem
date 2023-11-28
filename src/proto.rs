@@ -179,7 +179,7 @@ where
 
         match zcrc {
             ZCRCW => {
-                let frame = Frame::new(&Header::new_count(Encoding::ZHEX, Type::ZACK, *count));
+                let frame = Frame::new(&ZACK_HEADER.with_count(*count));
                 rw.write_all(&frame.0)?;
                 return Ok(true);
             }
@@ -187,7 +187,7 @@ where
                 return Ok(true);
             }
             ZCRCQ => {
-                let frame = Frame::new(&Header::new_count(Encoding::ZHEX, Type::ZACK, *count));
+                let frame = Frame::new(&ZACK_HEADER.with_count(*count));
                 rw.write_all(&frame.0)?;
             }
             ZCRCG => {
@@ -262,12 +262,4 @@ where
     let mut esc_data = Vec::with_capacity(data.len() + data.len() / 10);
     crate::escape_u8_array(data, &mut esc_data);
     w.write_all(&esc_data)
-}
-
-/// Writes "Over & Out"
-pub fn write_over_and_out<W>(w: &mut W) -> io::Result<()>
-where
-    W: io::Write,
-{
-    w.write_all("OO".as_bytes())
 }

@@ -74,9 +74,9 @@ where
             Some(x) => x,
             None => {
                 match state {
-                    State::ReceivingData => port.write_all(
-                        &Frame::new(&Header::new_count(Encoding::ZHEX, Type::ZRPOS, count)).0,
-                    )?,
+                    State::ReceivingData => {
+                        port.write_all(&Frame::new(&ZRPOS_HEADER.with_count(count)).0)?
+                    }
                     _ => port.write_all(&Frame::new(&ZNAK_HEADER).0)?,
                 }
                 continue;
@@ -97,9 +97,7 @@ where
                 if recv_zlde_frame(frame.encoding(), &mut port, &mut buf)?.is_none() {
                     port.write_all(&Frame::new(&ZNAK_HEADER).0)?;
                 } else {
-                    port.write_all(
-                        &Frame::new(&Header::new_count(Encoding::ZHEX, Type::ZRPOS, count)).0,
-                    )?;
+                    port.write_all(&Frame::new(&ZRPOS_HEADER.with_count(count)).0)?;
 
                     // TODO: process supplied data
                     if let Ok(s) = from_utf8(&buf) {
@@ -108,19 +106,17 @@ where
                 }
             }
             State::ReceivingData => {
-                if frame.get_count() != count
+                if frame.count() != count
                     || !recv_data(frame.encoding() as u8, &mut count, &mut port, &mut w)?
                 {
-                    port.write_all(
-                        &Frame::new(&Header::new_count(Encoding::ZHEX, Type::ZRPOS, count)).0,
-                    )?
+                    port.write_all(&Frame::new(&ZRPOS_HEADER.with_count(count)).0)?
                 }
             }
             State::CheckingData => {
-                if frame.get_count() != count {
+                if frame.count() != count {
                     error!(
                         "ZEOF offset mismatch: frame({}) != recv({})",
-                        frame.get_count(),
+                        frame.count(),
                         count
                     );
                     // receiver ignores the ZEOF because a new zdata is coming

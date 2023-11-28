@@ -6,10 +6,14 @@ use crc::{Crc, CRC_16_XMODEM, CRC_32_ISO_HDLC};
 pub const CRC16: Crc<u16> = Crc::<u16>::new(&CRC_16_XMODEM);
 pub const CRC32: Crc<u32> = Crc::<u32>::new(&CRC_32_ISO_HDLC);
 
+pub const ZACK_HEADER: Header = Header::new(Encoding::ZHEX, Type::ZACK, &[0; 4]);
+pub const ZDATA_HEADER: Header = Header::new(Encoding::ZBIN32, Type::ZDATA, &[0; 4]);
+pub const ZEOF_HEADER: Header = Header::new(Encoding::ZBIN32, Type::ZEOF, &[0; 4]);
 pub const ZFILE_HEADER: Header = Header::new(Encoding::ZBIN32, Type::ZFILE, &[0, 0, 0, 0x23]);
 pub const ZFIN_HEADER: Header = Header::new(Encoding::ZHEX, Type::ZFIN, &[0; 4]);
 pub const ZNAK_HEADER: Header = Header::new(Encoding::ZHEX, Type::ZNAK, &[0; 4]);
 pub const ZRINIT_HEADER: Header = Header::new(Encoding::ZHEX, Type::ZRINIT, &[0, 0, 0, 0x23]);
+pub const ZRPOS_HEADER: Header = Header::new(Encoding::ZHEX, Type::ZRPOS, &[0; 4]);
 pub const ZRQINIT_HEADER: Header = Header::new(Encoding::ZHEX, Type::ZRQINIT, &[0, 0, 0, 0x23]);
 
 pub const ZPAD: u8 = b'*';
