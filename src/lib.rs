@@ -267,32 +267,23 @@ mod tests {
         assert_eq!(crate::parse_header(&i[..]).unwrap_or(None), None);
     }
 
-    #[test]
-    fn test_recv_zlde_frame() {
-        let i = vec![ZLDE, ZCRCE, 237, 174];
-        let mut v = vec![];
-        assert_eq!(
-            crate::recv_zlde_frame(Encoding::ZBIN, &mut i.as_slice(), &mut v).unwrap(),
-            Some(ZCRCE)
-        );
-        assert_eq!(&v[..], []);
+    #[rstest::rstest]
+    #[case(Encoding::ZBIN, &[ZLDE, ZCRCE, 237, 174], Some(ZCRCE), &[])]
+    #[case(Encoding::ZBIN, &[ZLDE, 0x00, ZLDE, ZCRCW, 221, 205], Some(ZCRCW), &[0x00])]
+    #[case(Encoding::ZBIN32, &[0, 1, 2, 3, 4, ZLDE, 0x60, ZLDE, 0x60, ZLDE, ZCRCQ, 85, 114, 241, 70], Some(ZCRCQ), &[0, 1, 2, 3, 4, 0x20, 0x20])]
+    pub fn test_recv_zlde_frame(
+        #[case] encoding: Encoding,
+        #[case] input: &[u8],
+        #[case] expected_result: std::option::Option<u8>,
+        #[case] expected_output: &[u8],
+    ) {
+        let input = input.to_vec();
+        let mut output = vec![];
 
-        let i = vec![ZLDE, 0x00, ZLDE, ZCRCW, 221, 205];
-        let mut v = vec![];
         assert_eq!(
-            crate::recv_zlde_frame(Encoding::ZBIN, &mut i.as_slice(), &mut v).unwrap(),
-            Some(ZCRCW)
+            crate::recv_zlde_frame(encoding, &mut input.as_slice(), &mut output).unwrap(),
+            expected_result
         );
-        assert_eq!(&v[..], [0x00]);
-
-        let i = vec![
-            0, 1, 2, 3, 4, ZLDE, 0x60, ZLDE, 0x60, ZLDE, ZCRCQ, 85, 114, 241, 70,
-        ];
-        let mut v = vec![];
-        assert_eq!(
-            crate::recv_zlde_frame(Encoding::ZBIN32, &mut i.as_slice(), &mut v).unwrap(),
-            Some(ZCRCQ)
-        );
-        assert_eq!(&v[..], [0, 1, 2, 3, 4, 0x20, 0x20]);
+        assert_eq!(&output[..], expected_output);
     }
 }
