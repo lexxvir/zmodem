@@ -1,10 +1,11 @@
+use crate::{
+    frame::{Encoding, Frame, Header, Type},
+    port, ZACK_HEADER, ZCRCE, ZCRCG, ZCRCQ, ZCRCW, ZFIN_HEADER, ZNAK_HEADER, ZRINIT_HEADER,
+    ZRPOS_HEADER,
+};
 use std::io::{BufRead, Read, Result, Write};
 use std::str::from_utf8;
 use std::{thread, time};
-
-use crate::frame::*;
-use crate::port;
-use crate::*;
 
 #[derive(Debug, PartialEq)]
 enum State {
@@ -67,8 +68,8 @@ where
             Err(_) => return Ok(false),
         };
 
-        // Read and parse ZLDE frame:
-        let zcrc = match crate::recv_zlde_frame(encoding, rw, &mut buf)? {
+        // Read and parse ZDLE frame:
+        let zcrc = match crate::recv_zdle_frame(encoding, rw, &mut buf)? {
             Some(x) => x,
             None => return Ok(false),
         };
@@ -141,7 +142,7 @@ where
             State::ProcessingZFILE => {
                 let mut buf = Vec::new();
 
-                if crate::recv_zlde_frame(frame.encoding(), &mut port, &mut buf)?.is_none() {
+                if crate::recv_zdle_frame(frame.encoding(), &mut port, &mut buf)?.is_none() {
                     port.write_all(&Frame::new(&ZNAK_HEADER).0)?;
                 } else {
                     port.write_all(&Frame::new(&ZRPOS_HEADER.with_count(count)).0)?;

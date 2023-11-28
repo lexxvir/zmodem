@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //! ZMODEM transfer protocol frame
 
-use crate::zerocopy::AsBytes;
-use crate::*;
+use crate::{CRC16, CRC32, XON, ZDLE, ZPAD};
 use core::convert::TryFrom;
 use std::fmt::{self, Display};
+use zerocopy::AsBytes;
 
 #[repr(u8)]
 #[allow(clippy::upper_case_acronyms)]
@@ -185,7 +185,7 @@ impl Frame {
             out.push(ZPAD);
         }
 
-        out.push(ZLDE);
+        out.push(ZDLE);
         out.extend_from_slice(header.as_bytes());
 
         // Skips ZPAD and encoding:

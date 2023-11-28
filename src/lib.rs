@@ -14,10 +14,10 @@ mod port;
 pub mod recv;
 pub mod send;
 
-use crate::frame::*;
 use core::convert::TryFrom;
 use crc::{Crc, CRC_16_XMODEM, CRC_32_ISO_HDLC};
-use hex::*;
+use frame::{Encoding, Header, Type};
+use hex::FromHex;
 use log::LogLevel::Debug;
 use std::io::{self, BufRead, ErrorKind, Read, Write};
 
@@ -35,8 +35,8 @@ pub const ZRPOS_HEADER: Header = Header::new(Encoding::ZHEX, Type::ZRPOS, &[0; 4
 pub const ZRQINIT_HEADER: Header = Header::new(Encoding::ZHEX, Type::ZRQINIT, &[0, 0, 0, 0x23]);
 
 pub const ZPAD: u8 = b'*';
-pub const ZLDE: u8 = 0x18;
-pub const ZLDEE: u8 = 0x58;
+pub const ZDLE: u8 = 0x18;
+pub const ZDLEE: u8 = 0x58;
 
 pub const ESC_FF: u8 = b'm';
 pub const ESC_7F: u8 = b'l';
@@ -54,10 +54,10 @@ pub fn is_escaped(byte: u8) -> bool {
 
 pub fn escape(value: u8) -> Option<[u8; 2]> {
     Some(match value {
-        0xFF => [ZLDE, ESC_FF],
-        0x7F => [ZLDE, ESC_7F],
-        0x10 | 0x90 | 0x11 | 0x91 | 0x13 | 0x93 => [ZLDE, value ^ 0x40],
-        ZLDE => [ZLDE, ZLDEE],
+        0xFF => [ZDLE, ESC_FF],
+        0x7F => [ZDLE, ESC_7F],
+        0x10 | 0x90 | 0x11 | 0x91 | 0x13 | 0x93 => [ZDLE, value ^ 0x40],
+        ZDLE => [ZDLE, ZDLEE],
         _ => return None,
     })
 }
@@ -86,7 +86,7 @@ pub fn escape_array(src: &[u8], dst: &mut Vec<u8>) {
     }
 }
 
-/// Skips (ZPAD, [ZPAD,] ZLDE) sequence.
+/// Skips (ZPAD, [ZPAD,] ZDLE) sequence.
 pub fn try_skip_zpad<P>(port: &mut P) -> io::Result<bool>
 where
     P: BufRead,
@@ -103,7 +103,7 @@ where
         value = port.read_exact(&mut read_buf).map(|_| read_buf[0])?;
     }
 
-    if value == ZLDE {
+    if value == ZDLE {
         Ok(true)
     } else {
         Err(ErrorKind::InvalidData.into())
@@ -170,10 +170,10 @@ where
     Ok(Some(header))
 }
 
-/// Receives sequence: <escaped data> ZLDE ZCRC* <CRC bytes>
-/// Unescapes sequencies such as 'ZLDE <escaped byte>'
+/// Receives sequence: <escaped data> ZDLE ZCRC* <CRC bytes>
+/// Unescapes sequencies such as 'ZDLE <escaped byte>'
 /// If Ok returns <unescaped data> in buf and ZCRC* byte as return value
-pub fn recv_zlde_frame<R>(
+pub fn recv_zdle_frame<R>(
     encoding: Encoding,
     r: &mut R,
     buf: &mut Vec<u8>,
@@ -182,13 +182,13 @@ where
     R: io::BufRead,
 {
     loop {
-        r.read_until(ZLDE, buf)?;
+        r.read_until(ZDLE, buf)?;
 
         let mut b = [0; 1];
         let b = r.read_exact(&mut b).map(|_| b[0])?;
 
         if !crate::is_escaped(b) {
-            *buf.last_mut().unwrap() = b; // replace ZLDE by ZCRC* byte
+            *buf.last_mut().unwrap() = b; // replace ZDLE by ZCRC* byte
             break;
         }
 
@@ -221,7 +221,7 @@ where
         let mut buf = [0; 1];
 
         *x = match r.read_exact(&mut buf).map(|_| buf[0])? {
-            ZLDE => crate::unescape(r.read_exact(&mut buf).map(|_| buf[0])?),
+            ZDLE => crate::unescape(r.read_exact(&mut buf).map(|_| buf[0])?),
             y => y,
         };
     }
@@ -229,7 +229,7 @@ where
     Ok(())
 }
 
-pub fn write_zlde_data<W>(w: &mut W, zcrc_byte: u8, data: &[u8]) -> io::Result<()>
+pub fn write_zdle_data<W>(w: &mut W, zcrc_byte: u8, data: &[u8]) -> io::Result<()>
 where
     W: Write,
 {
@@ -261,18 +261,21 @@ where
     crate::escape_array(&crc, &mut esc_crc);
 
     w.write_all(&esc_data)?;
-    w.write_all(&[ZLDE, zcrc_byte])?;
+    w.write_all(&[ZDLE, zcrc_byte])?;
     w.write_all(&esc_crc)?;
 
     Ok(())
 }
 #[cfg(test)]
 mod tests {
-    use crate::*;
+    use crate::{
+        frame::{Encoding, Frame, Header, Type},
+        XON, ZCRCE, ZCRCQ, ZCRCW, ZDLE, ZPAD,
+    };
 
     #[rstest::rstest]
-    #[case(Encoding::ZBIN, Type::ZRQINIT, &[ZPAD, ZLDE, Encoding::ZBIN as u8, 0, 0, 0, 0, 0, 0, 0])]
-    #[case(Encoding::ZBIN32, Type::ZRQINIT, &[ZPAD, ZLDE, Encoding::ZBIN32 as u8, 0, 0, 0, 0, 0, 29, 247, 34, 198])]
+    #[case(Encoding::ZBIN, Type::ZRQINIT, &[ZPAD, ZDLE, Encoding::ZBIN as u8, 0, 0, 0, 0, 0, 0, 0])]
+    #[case(Encoding::ZBIN32, Type::ZRQINIT, &[ZPAD, ZDLE, Encoding::ZBIN32 as u8, 0, 0, 0, 0, 0, 29, 247, 34, 198])]
     pub fn test_header(
         #[case] encoding: Encoding,
         #[case] frame_type: Type,
@@ -284,8 +287,8 @@ mod tests {
     }
 
     #[rstest::rstest]
-    #[case(Encoding::ZBIN, Type::ZRQINIT, &[1, 1, 1, 1], &[ZPAD, ZLDE, Encoding::ZBIN as u8, 0, 1, 1, 1, 1, 98, 148])]
-    #[case(Encoding::ZHEX, Type::ZRQINIT, &[1, 1, 1, 1], &[ZPAD, ZPAD, ZLDE, Encoding::ZHEX as u8, b'0', b'0', b'0', b'1', b'0', b'1', b'0', b'1', b'0', b'1', 54, 50, 57, 52, b'\r', b'\n', XON])]
+    #[case(Encoding::ZBIN, Type::ZRQINIT, &[1, 1, 1, 1], &[ZPAD, ZDLE, Encoding::ZBIN as u8, 0, 1, 1, 1, 1, 98, 148])]
+    #[case(Encoding::ZHEX, Type::ZRQINIT, &[1, 1, 1, 1], &[ZPAD, ZPAD, ZDLE, Encoding::ZHEX as u8, b'0', b'0', b'0', b'1', b'0', b'1', b'0', b'1', b'0', b'1', 54, 50, 57, 52, b'\r', b'\n', XON])]
     pub fn test_header_with_flags(
         #[case] encoding: Encoding,
         #[case] frame_type: Type,
@@ -298,9 +301,9 @@ mod tests {
     }
 
     #[rstest::rstest]
-    #[case(&[ZPAD, ZLDE], Ok(true))]
-    #[case(&[ZPAD, ZPAD, ZLDE], Ok(true))]
-    #[case(&[ZLDE], Ok(true))]
+    #[case(&[ZPAD, ZDLE], Ok(true))]
+    #[case(&[ZPAD, ZPAD, ZDLE], Ok(true))]
+    #[case(&[ZDLE], Ok(true))]
     #[case(&[], Err(std::io::ErrorKind::InvalidData.into()))]
     #[case(&[0; 100], Ok(false))]
     pub fn test_try_skip_zpad(#[case] data: &[u8], #[case] expected: std::io::Result<bool>) {
@@ -315,7 +318,7 @@ mod tests {
     #[case(&[Encoding::ZHEX as u8, b'0', b'1', b'0', b'1', b'0', b'2', b'0', b'3', b'0', b'4', b'a', b'7', b'5', b'2'], &Header::new(Encoding::ZHEX, Type::ZRINIT, &[0x1, 0x2, 0x3, 0x4]))]
     #[case(&[Encoding::ZBIN as u8, Type::ZRINIT as u8, 0xa, 0xb, 0xc, 0xd, 0xa6, 0xcb], &Header::new(Encoding::ZBIN, Type::ZRINIT, &[0xa, 0xb, 0xc, 0xd]))]
     #[case(&[Encoding::ZBIN32 as u8, Type::ZRINIT as u8, 0xa, 0xb, 0xc, 0xd, 0x99, 0xe2, 0xae, 0x4a], &Header::new(Encoding::ZBIN32, Type::ZRINIT, &[0xa, 0xb, 0xc, 0xd]))]
-    #[case(&[Encoding::ZBIN as u8, Type::ZRINIT as u8, 0xa, ZLDE, b'l', 0xd, ZLDE, b'm', 0x5e, 0x6f], &Header::new(Encoding::ZBIN, Type::ZRINIT, &[0xa, 0x7f, 0xd, 0xff]))]
+    #[case(&[Encoding::ZBIN as u8, Type::ZRINIT as u8, 0xa, ZDLE, b'l', 0xd, ZDLE, b'm', 0x5e, 0x6f], &Header::new(Encoding::ZBIN, Type::ZRINIT, &[0xa, 0x7f, 0xd, 0xff]))]
     pub fn test_parse_header(#[case] input: &[u8], #[case] expected: &Header) {
         assert_eq!(
             &mut crate::parse_header(&input[..]).unwrap().unwrap(),
@@ -331,10 +334,10 @@ mod tests {
     }
 
     #[rstest::rstest]
-    #[case(Encoding::ZBIN, &[ZLDE, ZCRCE, 237, 174], Some(ZCRCE), &[])]
-    #[case(Encoding::ZBIN, &[ZLDE, 0x00, ZLDE, ZCRCW, 221, 205], Some(ZCRCW), &[0x00])]
-    #[case(Encoding::ZBIN32, &[0, 1, 2, 3, 4, ZLDE, 0x60, ZLDE, 0x60, ZLDE, ZCRCQ, 85, 114, 241, 70], Some(ZCRCQ), &[0, 1, 2, 3, 4, 0x20, 0x20])]
-    pub fn test_recv_zlde_frame(
+    #[case(Encoding::ZBIN, &[ZDLE, ZCRCE, 237, 174], Some(ZCRCE), &[])]
+    #[case(Encoding::ZBIN, &[ZDLE, 0x00, ZDLE, ZCRCW, 221, 205], Some(ZCRCW), &[0x00])]
+    #[case(Encoding::ZBIN32, &[0, 1, 2, 3, 4, ZDLE, 0x60, ZDLE, 0x60, ZDLE, ZCRCQ, 85, 114, 241, 70], Some(ZCRCQ), &[0, 1, 2, 3, 4, 0x20, 0x20])]
+    pub fn test_recv_zdle_frame(
         #[case] encoding: Encoding,
         #[case] input: &[u8],
         #[case] expected_result: std::option::Option<u8>,
@@ -344,7 +347,7 @@ mod tests {
         let mut output = vec![];
 
         assert_eq!(
-            crate::recv_zlde_frame(encoding, &mut input.as_slice(), &mut output).unwrap(),
+            crate::recv_zdle_frame(encoding, &mut input.as_slice(), &mut output).unwrap(),
             expected_result
         );
         assert_eq!(&output[..], expected_output);

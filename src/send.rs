@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
+use crate::{
+    frame::{Frame, Type},
+    port, ZCRCG, ZCRCW, ZDATA_HEADER, ZEOF_HEADER, ZFILE_HEADER, ZFIN_HEADER, ZNAK_HEADER,
+    ZRQINIT_HEADER,
+};
 use std::io::{Read, Result, Seek, SeekFrom, Write};
-
-use crate::frame::*;
-use crate::port;
-use crate::*;
 
 const SUBPACKET_SIZE: usize = 1024 * 8;
 const SUBPACKET_PER_ACK: usize = 10;
@@ -68,7 +69,7 @@ where
                     zfile_data += &format!(" {}", size);
                 }
                 zfile_data += "\0";
-                crate::write_zlde_data(&mut port, ZCRCW, zfile_data.as_bytes())?;
+                crate::write_zdle_data(&mut port, ZCRCW, zfile_data.as_bytes())?;
             }
             Some(Type::ZDATA) => {
                 offset = frame.count();
@@ -90,12 +91,12 @@ where
                     loop {
                         i += 1;
 
-                        crate::write_zlde_data(&mut port, ZCRCG, &data[..num])?;
+                        crate::write_zdle_data(&mut port, ZCRCG, &data[..num])?;
                         offset += num as u32;
 
                         let num = r.read(&mut data)?;
                         if num < data.len() || i >= SUBPACKET_PER_ACK {
-                            crate::write_zlde_data(&mut port, ZCRCW, &data[..num])?;
+                            crate::write_zdle_data(&mut port, ZCRCW, &data[..num])?;
                             break;
                         }
                     }

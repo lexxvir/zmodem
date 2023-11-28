@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
-//! Manages I/O buffered end-point for the ZMODEM transfer protocol.
+//! Manages end-point for the ZMODEM transfer protocol.
 
-use std::io::*;
+use std::io::{BufRead, BufReader, Read, Result, Write};
 
 pub struct Port<P> {
     inner: BufReader<P>,
