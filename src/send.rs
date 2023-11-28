@@ -9,58 +9,19 @@ use crate::*;
 const SUBPACKET_SIZE: usize = 1024 * 8;
 const SUBPACKET_PER_ACK: usize = 10;
 
-#[derive(Debug, PartialEq)]
-enum State {
-    /// Waiting ZRINIT invite (do nothing)
-    WaitingInit,
-
-    /// Sending ZRQINIT
-    SendingZRQINIT,
-
-    /// Sending ZFILE frame
-    SendingZFILE,
-
-    /// Do nothing, just waiting for ZPOS
-    WaitingZPOS,
-
-    /// Sending ZDATA & subpackets
-    SendingData,
-
-    /// Sending ZFIN
-    SendingZFIN,
-
-    /// All works done, exiting
-    Done,
-}
-
-impl State {
-    fn new() -> State {
-        State::WaitingInit
-    }
-
-    fn next(self, frame: &Header) -> State {
-        match (self, frame.frame_type()) {
-            (State::WaitingInit, Type::ZRINIT) => State::SendingZFILE,
-            (State::WaitingInit, _) => State::SendingZRQINIT,
-
-            (State::SendingZRQINIT, Type::ZRINIT) => State::SendingZFILE,
-
-            (State::SendingZFILE, Type::ZRPOS) => State::SendingData,
-            (State::SendingZFILE, Type::ZRINIT) => State::WaitingZPOS,
-
-            (State::WaitingZPOS, Type::ZRPOS) => State::SendingData,
-
-            (State::SendingData, Type::ZACK) => State::SendingData,
-            (State::SendingData, Type::ZRPOS) => State::SendingData,
-            (State::SendingData, Type::ZRINIT) => State::SendingZFIN,
-
-            (State::SendingZFIN, Type::ZFIN) => State::Done,
-
-            (s, _) => {
-                error!("Unexpected (state, frame) combination: {:#?} {}", s, frame);
-                s // don't change current state
-            }
-        }
+fn next_state(sender: Option<Type>, receiver: Type) -> Option<Type> {
+    match (sender, receiver) {
+        (None, Type::ZRINIT) => Some(Type::ZFILE),
+        (None, _) => Some(Type::ZRQINIT),
+        (Some(Type::ZRQINIT), Type::ZRINIT) => Some(Type::ZFILE),
+        (Some(Type::ZFILE), Type::ZRPOS) => Some(Type::ZDATA),
+        (Some(Type::ZFILE), Type::ZRINIT) => Some(Type::ZRINIT),
+        (Some(Type::ZRINIT), Type::ZRPOS) => Some(Type::ZDATA),
+        (Some(Type::ZDATA), Type::ZACK) => Some(Type::ZDATA),
+        (Some(Type::ZDATA), Type::ZRPOS) => Some(Type::ZDATA),
+        (Some(Type::ZDATA), Type::ZRINIT) => Some(Type::ZFIN),
+        (Some(Type::ZFIN), Type::ZFIN) => None,
+        (_, _) => None,
     }
 }
 
@@ -77,9 +38,9 @@ where
 
     port.write_all(&Frame::new(&ZRQINIT_HEADER).0)?;
 
-    let mut state = State::new();
+    let mut state = None;
 
-    while state != State::Done {
+    loop {
         port.flush()?;
 
         if !crate::try_skip_zpad(&mut port)? {
@@ -94,13 +55,13 @@ where
             }
         };
 
-        state = state.next(&frame);
+        state = next_state(state, frame.frame_type());
         debug!("State: {:?}", state);
 
         // do things according new state
         match state {
-            State::SendingZRQINIT => port.write_all(&Frame::new(&ZRQINIT_HEADER).0)?,
-            State::SendingZFILE => {
+            Some(Type::ZRQINIT) => port.write_all(&Frame::new(&ZRQINIT_HEADER).0)?,
+            Some(Type::ZFILE) => {
                 port.write_all(&Frame::new(&ZFILE_HEADER).0)?;
                 let mut zfile_data = format!("{}\0", filename);
                 if let Some(size) = filesize {
@@ -109,7 +70,7 @@ where
                 zfile_data += "\0";
                 crate::write_zlde_data(&mut port, ZCRCW, zfile_data.as_bytes())?;
             }
-            State::SendingData => {
+            Some(Type::ZDATA) => {
                 offset = frame.count();
                 r.seek(SeekFrom::Start(offset as u64))?;
 
@@ -140,9 +101,12 @@ where
                     }
                 }
             }
-            State::SendingZFIN => port.write_all(&Frame::new(&ZFIN_HEADER).0)?,
+            Some(Type::ZFIN) => port.write_all(&Frame::new(&ZFIN_HEADER).0)?,
             // Write "over and out" (OO):
-            State::Done => port.write_all("OO".as_bytes())?,
+            None => {
+                port.write_all("OO".as_bytes())?;
+                break;
+            }
             _ => (),
         }
     }
