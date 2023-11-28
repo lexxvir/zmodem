@@ -19,7 +19,8 @@ use crate::consts::*;
 use crate::frame::*;
 use core::convert::TryFrom;
 use hex::*;
-use std::io::{self, BufRead, ErrorKind, Read};
+use log::LogLevel::Debug;
+use std::io::{self, BufRead, ErrorKind, Read, Write};
 
 pub fn is_escaped(byte: u8) -> bool {
     !matches!(byte, ZCRCE | ZCRCG | ZCRCQ | ZCRCW)
@@ -202,6 +203,43 @@ where
     Ok(())
 }
 
+pub fn write_zlde_data<W>(w: &mut W, zcrc_byte: u8, data: &[u8]) -> io::Result<()>
+where
+    W: Write,
+{
+    if log_enabled!(Debug) {
+        debug!(
+            "  ZCRC{} subpacket, size = {}",
+            match zcrc_byte {
+                ZCRCE => "E",
+                ZCRCG => "G",
+                ZCRCQ => "Q",
+                ZCRCW => "W",
+                _ => "?",
+            },
+            data.len()
+        );
+    }
+
+    let mut digest = CRC32.digest();
+    digest.update(data);
+    digest.update(&[zcrc_byte]);
+    // Assuming little-endian byte order, given that ZMODEM used to work on
+    // VAX, which was a little-endian computer architecture:
+    let crc = digest.finalize().to_le_bytes();
+
+    let mut esc_data = vec![];
+    let mut esc_crc = vec![];
+
+    crate::escape_array(data, &mut esc_data);
+    crate::escape_array(&crc, &mut esc_crc);
+
+    w.write_all(&esc_data)?;
+    w.write_all(&[ZLDE, zcrc_byte])?;
+    w.write_all(&esc_crc)?;
+
+    Ok(())
+}
 #[cfg(test)]
 mod tests {
     use crate::consts::*;
