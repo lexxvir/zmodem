@@ -6,7 +6,7 @@ use log::LogLevel::Debug;
 use std::io::{self, BufRead, ErrorKind};
 
 use crate::consts::*;
-use crate::frame::{escape_u8_array, Encoding, Frame, Header, Type};
+use crate::frame::{Encoding, Frame, Header, Type};
 
 /// Skips (ZPAD, [ZPAD,] ZLDE) sequence
 pub fn try_skip_zpad<P>(port: &mut P) -> io::Result<bool>
@@ -98,7 +98,7 @@ where
 {
     for x in buf {
         *x = match read_byte(&mut r)? {
-            ZLDE => unescape(read_byte(&mut r)?),
+            ZLDE => crate::unescape_u8(read_byte(&mut r)?),
             y => y,
         };
     }
@@ -121,12 +121,12 @@ where
         r.read_until(ZLDE, buf)?;
         let b = read_byte(r)?;
 
-        if !is_escaped(b) {
+        if !crate::is_u8_escaped(b) {
             *buf.last_mut().unwrap() = b; // replace ZLDE by ZCRC* byte
             break;
         }
 
-        *buf.last_mut().unwrap() = unescape(b);
+        *buf.last_mut().unwrap() = crate::unescape_u8(b);
     }
 
     let crc_len = if encoding == Encoding::ZBIN32 { 4 } else { 2 };
@@ -200,25 +200,6 @@ where
     }
 }
 
-/// Converts escaped byte to unescaped one
-fn unescape(escaped_byte: u8) -> u8 {
-    match escaped_byte {
-        ESC_FF => 0xFF,
-        ESC_7F => 0x7F,
-        x => {
-            if x & 0x60 != 0 {
-                x ^ 0x40
-            } else {
-                x
-            }
-        }
-    }
-}
-
-fn is_escaped(byte: u8) -> bool {
-    !matches!(byte, ZCRCE | ZCRCG | ZCRCQ | ZCRCW)
-}
-
 /// Reads out one byte
 fn read_byte<R>(r: &mut R) -> io::Result<u8>
 where
@@ -279,7 +260,7 @@ where
     W: io::Write,
 {
     let mut esc_data = Vec::with_capacity(data.len() + data.len() / 10);
-    escape_u8_array(data, &mut esc_data);
+    crate::escape_u8_array(data, &mut esc_data);
     w.write_all(&esc_data)
 }
 

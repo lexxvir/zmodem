@@ -16,6 +16,46 @@ mod proto;
 pub mod recv;
 pub mod send;
 
+use consts::*;
+
+pub fn is_u8_escaped(byte: u8) -> bool {
+    !matches!(byte, ZCRCE | ZCRCG | ZCRCQ | ZCRCW)
+}
+
+pub fn escape_u8(value: u8) -> Option<[u8; 2]> {
+    Some(match value {
+        0xFF => [ZLDE, ESC_FF],
+        0x7F => [ZLDE, ESC_7F],
+        0x10 | 0x90 | 0x11 | 0x91 | 0x13 | 0x93 => [ZLDE, value ^ 0x40],
+        ZLDE => [ZLDE, ZLDEE],
+        _ => return None,
+    })
+}
+
+pub fn escape_u8_array(src: &[u8], dst: &mut Vec<u8>) {
+    for value in src {
+        if let Some(value) = escape_u8(*value) {
+            dst.extend_from_slice(&value);
+        } else {
+            dst.push(*value);
+        }
+    }
+}
+
+pub fn unescape_u8(escaped_byte: u8) -> u8 {
+    match escaped_byte {
+        ESC_FF => 0xFF,
+        ESC_7F => 0x7F,
+        x => {
+            if x & 0x60 != 0 {
+                x ^ 0x40
+            } else {
+                x
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::consts::*;
