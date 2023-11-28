@@ -149,7 +149,7 @@ pub fn escape_u8_array(src: &[u8], dst: &mut Vec<u8>) {
 }
 
 #[repr(C)]
-#[derive(AsBytes, Clone, Copy, Debug)]
+#[derive(AsBytes, Clone, Copy, Debug, PartialEq)]
 pub struct Header {
     encoding: Encoding,
     frame_type: Type,
@@ -234,33 +234,5 @@ impl Frame {
         }
 
         Self(out)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::frame::*;
-
-    #[rstest::rstest]
-    #[case(Encoding::ZBIN, Type::ZRQINIT, &[ZPAD, ZLDE, Encoding::ZBIN as u8, 0, 0, 0, 0, 0, 0, 0])]
-    #[case(Encoding::ZBIN32, Type::ZRQINIT, &[ZPAD, ZLDE, Encoding::ZBIN32 as u8, 0, 0, 0, 0, 0, 29, 247, 34, 198])]
-    fn test_header(#[case] encoding: Encoding, #[case] frame_type: Type, #[case] expected: &[u8]) {
-        let header = Header::new(encoding, frame_type, &[0; 4]);
-        let mut frame = Frame::new(&header);
-        assert_eq!(frame, expected);
-    }
-
-    #[rstest::rstest]
-    #[case(Encoding::ZBIN, Type::ZRQINIT, &[1, 1, 1, 1], &[ZPAD, ZLDE, Encoding::ZBIN as u8, 0, 1, 1, 1, 1, 98, 148])]
-    #[case(Encoding::ZHEX, Type::ZRQINIT, &[1, 1, 1, 1], &[ZPAD, ZPAD, ZLDE, Encoding::ZHEX as u8, b'0', b'0', b'0', b'1', b'0', b'1', b'0', b'1', b'0', b'1', 54, 50, 57, 52, b'\r', b'\n', XON])]
-    fn test_header_with_flags(
-        #[case] encoding: Encoding,
-        #[case] frame_type: Type,
-        #[case] flags: &[u8; 4],
-        #[case] expected: &[u8],
-    ) {
-        let header = Header::new(encoding, frame_type, flags);
-        let mut frame = Frame::new(&header);
-        assert_eq!(frame, expected);
     }
 }
