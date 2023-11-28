@@ -10,7 +10,13 @@ use std::io::{Read, Result, Seek, SeekFrom, Write};
 const SUBPACKET_SIZE: usize = 1024 * 8;
 const SUBPACKET_PER_ACK: usize = 10;
 
-fn next_state(sender: Option<Type>, receiver: Type) -> Option<Type> {
+/// Map the previous frame type of the sender and incoming frame type of the
+/// receiver to the next packet to be sent.
+///
+/// NOTE: ZRINIT is used here as a wait state, as the sender does not use it for
+/// other purposes. Other than tat the states map to the packets that the sender
+/// sends next.
+const fn next_state(sender: Option<Type>, receiver: Type) -> Option<Type> {
     match (sender, receiver) {
         (None, Type::ZRINIT) => Some(Type::ZFILE),
         (None, _) => Some(Type::ZRQINIT),
@@ -53,15 +59,12 @@ where
         };
 
         state = next_state(state, frame.frame_type());
-        debug!("State: {:?}", state);
 
-        // do things according new state
         match state {
             Some(Type::ZRQINIT) => port.write_all(&Frame::new(&ZRQINIT_HEADER).0)?,
             Some(Type::ZFILE) => write_zfile(&mut port, filename, filesize)?,
             Some(Type::ZDATA) => write_zdata(&mut port, r, &frame)?,
             Some(Type::ZFIN) => port.write_all(&Frame::new(&ZFIN_HEADER).0)?,
-            // Write "over and out" (OO):
             None => {
                 port.write_all("OO".as_bytes())?;
                 break;
