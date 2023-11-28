@@ -201,23 +201,17 @@ pub fn new_frame(header: &Header, out: &mut Vec<u8>) {
     out.push(ZLDE);
     out.extend_from_slice(header.as_bytes());
 
-    // Append CRC16 or CRC32 over the frame type and flags:
+    // Skips ZPAD and encoding:
     match header.encoding {
         Encoding::ZBIN32 => out.extend_from_slice(&CRC32.checksum(&out[3..]).to_le_bytes()),
         Encoding::ZHEX => out.extend_from_slice(&CRC16.checksum(&out[4..]).to_be_bytes()),
         _ => out.extend_from_slice(&CRC16.checksum(&out[3..]).to_be_bytes()),
     };
 
-    // Substitute binary encoded frame type, flags and the checksum with the
-    // hex encoded versions:
+    // Skips ZPAD and encoding:
     if header.encoding == Encoding::ZHEX {
-        let hex = out
-            .drain(4..)
-            .collect::<Vec<u8>>()
-            .iter()
-            .map(|b| format!("{:02x}", b).to_string())
-            .collect::<Vec<String>>()
-            .join("");
+        let hex = hex::encode(&out[4..]);
+        out.truncate(4);
         out.extend_from_slice(hex.as_bytes());
     }
 
