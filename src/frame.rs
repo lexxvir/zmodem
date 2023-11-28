@@ -202,11 +202,11 @@ pub fn new_frame(header: &Header, out: &mut Vec<u8>) {
     out.extend_from_slice(header.as_bytes());
 
     // Append CRC16 or CRC32 over the frame type and flags:
-    out.append(&mut match header.encoding {
-        Encoding::ZBIN32 => CRC32.checksum(&out[3..]).to_le_bytes().to_vec(),
-        Encoding::ZHEX => CRC16.checksum(&out[4..]).to_be_bytes().to_vec(),
-        _ => CRC16.checksum(&out[3..]).to_be_bytes().to_vec(),
-    });
+    match header.encoding {
+        Encoding::ZBIN32 => out.extend_from_slice(&CRC32.checksum(&out[3..]).to_le_bytes()),
+        Encoding::ZHEX => out.extend_from_slice(&CRC16.checksum(&out[4..]).to_be_bytes()),
+        _ => out.extend_from_slice(&CRC16.checksum(&out[3..]).to_be_bytes()),
+    };
 
     // Substitute binary encoded frame type, flags and the checksum with the
     // hex encoded versions:
