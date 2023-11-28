@@ -157,7 +157,7 @@ pub struct Header {
 }
 
 impl Header {
-    pub fn new(encoding: Encoding, frame_type: Type, flags: &[u8; 4]) -> Header {
+    pub const fn new(encoding: Encoding, frame_type: Type, flags: &[u8; 4]) -> Header {
         Header {
             encoding,
             frame_type,
@@ -192,38 +192,48 @@ impl fmt::Display for Header {
     }
 }
 
-pub fn new_frame(header: &Header, out: &mut Vec<u8>) {
-    out.push(ZPAD);
-    if header.encoding == Encoding::ZHEX {
+#[allow(dead_code)]
+pub struct Frame(pub Vec<u8>);
+
+impl Frame {
+    #[allow(dead_code)]
+    pub fn new(header: &Header) -> Self {
+        let mut out = vec![];
+
         out.push(ZPAD);
-    }
-
-    out.push(ZLDE);
-    out.extend_from_slice(header.as_bytes());
-
-    // Skips ZPAD and encoding:
-    match header.encoding {
-        Encoding::ZBIN32 => out.extend_from_slice(&CRC32.checksum(&out[3..]).to_le_bytes()),
-        Encoding::ZHEX => out.extend_from_slice(&CRC16.checksum(&out[4..]).to_be_bytes()),
-        _ => out.extend_from_slice(&CRC16.checksum(&out[3..]).to_be_bytes()),
-    };
-
-    // Skips ZPAD and encoding:
-    if header.encoding == Encoding::ZHEX {
-        let hex = hex::encode(&out[4..]);
-        out.truncate(4);
-        out.extend_from_slice(hex.as_bytes());
-    }
-
-    escape_u8_array(&out.drain(3..).collect::<Vec<_>>(), out);
-
-    if header.encoding == Encoding::ZHEX {
-        // Add trailing CRLF for ZHEX transfer:
-        out.extend_from_slice(b"\r\n");
-
-        if header.frame_type != Type::ZACK && header.frame_type != Type::ZFIN {
-            out.push(XON);
+        if header.encoding == Encoding::ZHEX {
+            out.push(ZPAD);
         }
+
+        out.push(ZLDE);
+        out.extend_from_slice(header.as_bytes());
+
+        // Skips ZPAD and encoding:
+        match header.encoding {
+            Encoding::ZBIN32 => out.extend_from_slice(&CRC32.checksum(&out[3..]).to_le_bytes()),
+            Encoding::ZHEX => out.extend_from_slice(&CRC16.checksum(&out[4..]).to_be_bytes()),
+            _ => out.extend_from_slice(&CRC16.checksum(&out[3..]).to_be_bytes()),
+        };
+
+        // Skips ZPAD and encoding:
+        if header.encoding == Encoding::ZHEX {
+            let hex = hex::encode(&out[4..]);
+            out.truncate(4);
+            out.extend_from_slice(hex.as_bytes());
+        }
+
+        escape_u8_array(&out.drain(3..).collect::<Vec<_>>(), &mut out);
+
+        if header.encoding == Encoding::ZHEX {
+            // Add trailing CRLF for ZHEX transfer:
+            out.extend_from_slice(b"\r\n");
+
+            if header.frame_type != Type::ZACK && header.frame_type != Type::ZFIN {
+                out.push(XON);
+            }
+        }
+
+        Self(out)
     }
 }
 
@@ -236,12 +246,10 @@ mod tests {
     #[case(Encoding::ZBIN32, Type::ZRQINIT, &[ZPAD, ZLDE, Encoding::ZBIN32 as u8, 0, 0, 0, 0, 0, 29, 247, 34, 198])]
     fn test_header(#[case] encoding: Encoding, #[case] frame_type: Type, #[case] expected: &[u8]) {
         let header = Header::new(encoding, frame_type, &[0; 4]);
-
-        let mut frame = vec![];
-        new_frame(&header, &mut frame);
-
+        let mut frame = Frame::new(&header);
         assert_eq!(frame, expected);
     }
+
     #[rstest::rstest]
     #[case(Encoding::ZBIN, Type::ZRQINIT, &[1, 1, 1, 1], &[ZPAD, ZLDE, Encoding::ZBIN as u8, 0, 1, 1, 1, 1, 98, 148])]
     #[case(Encoding::ZHEX, Type::ZRQINIT, &[1, 1, 1, 1], &[ZPAD, ZPAD, ZLDE, Encoding::ZHEX as u8, b'0', b'0', b'0', b'1', b'0', b'1', b'0', b'1', b'0', b'1', 54, 50, 57, 52, b'\r', b'\n', XON])]
@@ -252,10 +260,7 @@ mod tests {
         #[case] expected: &[u8],
     ) {
         let header = Header::new(encoding, frame_type, flags);
-
-        let mut frame = vec![];
-        new_frame(&header, &mut frame);
-
+        let mut frame = Frame::new(&header);
         assert_eq!(frame, expected);
     }
 }

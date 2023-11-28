@@ -65,6 +65,7 @@ impl State {
     }
 }
 
+/// Send a file using the ZMODEM file transfer protocol.
 pub fn send<RW, R>(rw: RW, r: &mut R, filename: &str, filesize: Option<u32>) -> Result<()>
 where
     RW: Read + Write,
@@ -75,7 +76,7 @@ where
     let mut data = [0; SUBPACKET_SIZE];
     let mut offset: u32;
 
-    write_zrqinit(&mut port)?;
+    port.write_all(&Frame::new(&ZRQINIT_HEADER).0)?;
 
     let mut state = State::new();
 
@@ -89,7 +90,7 @@ where
         let frame = match parse_header(&mut port)? {
             Some(x) => x,
             None => {
-                write_znak(&mut port)?;
+                port.write_all(&Frame::new(&ZNAK_HEADER).0)?;
                 continue;
             }
         };
@@ -99,11 +100,10 @@ where
 
         // do things according new state
         match state {
-            State::SendingZRQINIT => {
-                write_zrqinit(&mut port)?;
-            }
+            State::SendingZRQINIT => port.write_all(&Frame::new(&ZRQINIT_HEADER).0)?,
             State::SendingZFILE => {
-                write_zfile(&mut port, filename, filesize)?;
+                port.write_all(&Frame::new(&ZFILE_HEADER).0)?;
+                write_zfile_data(&mut port, filename, filesize)?;
             }
             State::SendingData => {
                 offset = frame.get_count();
@@ -112,14 +112,18 @@ where
                 let num = r.read(&mut data)?;
 
                 if num == 0 {
-                    write_zeof(&mut port, offset)?;
+                    port.write_all(
+                        &Frame::new(&Header::new_count(Encoding::ZBIN32, Type::ZEOF, offset)).0,
+                    )?;
                 } else {
                     // ZBIN32|ZDATA
                     // ZCRCG - best perf
                     // ZCRCQ - mid perf
                     // ZCRCW - worst perf
                     // ZCRCE - send at end
-                    write_zdata(&mut port, offset)?;
+                    port.write_all(
+                        &Frame::new(&Header::new_count(Encoding::ZBIN32, Type::ZDATA, offset)).0,
+                    )?;
 
                     let mut i = 0;
                     loop {
@@ -136,12 +140,8 @@ where
                     }
                 }
             }
-            State::SendingZFIN => {
-                write_zfin(&mut port)?;
-            }
-            State::Done => {
-                write_over_and_out(&mut port)?;
-            }
+            State::SendingZFIN => port.write_all(&Frame::new(&ZFIN_HEADER).0)?,
+            State::Done => write_over_and_out(&mut port)?,
             _ => (),
         }
     }

@@ -2,6 +2,7 @@ use std::io::{Read, Result, Write};
 use std::str::from_utf8;
 use std::{thread, time};
 
+use crate::consts::*;
 use crate::frame::*;
 use crate::port;
 use crate::proto::*;
@@ -51,7 +52,7 @@ impl State {
     }
 }
 
-/// Receives data by Z-Modem protocol
+/// Receives a file using the ZMODEM file transfer protocol.
 pub fn recv<RW, W>(rw: RW, mut w: W) -> Result<usize>
 where
     RW: Read + Write,
@@ -62,7 +63,7 @@ where
 
     let mut state = State::new();
 
-    write_zrinit(&mut port)?;
+    port.write_all(&Frame::new(&ZRINIT_HEADER).0)?;
 
     while state != State::Done {
         if !try_skip_zpad(&mut port)? {
@@ -72,7 +73,12 @@ where
         let frame = match parse_header(&mut port)? {
             Some(x) => x,
             None => {
-                recv_error(&mut port, &state, count)?;
+                match state {
+                    State::ReceivingData => port.write_all(
+                        &Frame::new(&Header::new_count(Encoding::ZHEX, Type::ZRPOS, count)).0,
+                    )?,
+                    _ => port.write_all(&Frame::new(&ZNAK_HEADER).0)?,
+                }
                 continue;
             }
         };
@@ -83,15 +89,17 @@ where
         // do things according new state
         match state {
             State::SendingZRINIT => {
-                write_zrinit(&mut port)?;
+                port.write_all(&Frame::new(&ZRINIT_HEADER).0)?;
             }
             State::ProcessingZFILE => {
                 let mut buf = Vec::new();
 
                 if recv_zlde_frame(frame.encoding(), &mut port, &mut buf)?.is_none() {
-                    write_znak(&mut port)?;
+                    port.write_all(&Frame::new(&ZNAK_HEADER).0)?;
                 } else {
-                    write_zrpos(&mut port, count)?;
+                    port.write_all(
+                        &Frame::new(&Header::new_count(Encoding::ZHEX, Type::ZRPOS, count)).0,
+                    )?;
 
                     // TODO: process supplied data
                     if let Ok(s) = from_utf8(&buf) {
@@ -103,7 +111,9 @@ where
                 if frame.get_count() != count
                     || !recv_data(frame.encoding() as u8, &mut count, &mut port, &mut w)?
                 {
-                    write_zrpos(&mut port, count)?;
+                    port.write_all(
+                        &Frame::new(&Header::new_count(Encoding::ZHEX, Type::ZRPOS, count)).0,
+                    )?
                 }
             }
             State::CheckingData => {
@@ -115,27 +125,15 @@ where
                     );
                     // receiver ignores the ZEOF because a new zdata is coming
                 } else {
-                    write_zrinit(&mut port)?;
+                    port.write_all(&Frame::new(&ZRINIT_HEADER).0)?;
                 }
             }
             State::Done => {
-                write_zfin(&mut port)?;
+                port.write_all(&Frame::new(&ZFIN_HEADER).0)?;
                 thread::sleep(time::Duration::from_millis(10)); // sleep a bit
             }
         }
     }
 
     Ok(count as usize)
-}
-
-fn recv_error<W>(w: &mut W, state: &State, count: u32) -> Result<()>
-where
-    W: Write,
-{
-    // TODO: flush input
-
-    match *state {
-        State::ReceivingData => write_zrpos(w, count),
-        _ => write_znak(w),
-    }
 }
