@@ -2,9 +2,9 @@
 
 use std::io::{Read, Result, Seek, SeekFrom, Write};
 
-use crate::consts::*;
 use crate::frame::*;
 use crate::port;
+use crate::*;
 
 const SUBPACKET_SIZE: usize = 1024 * 8;
 const SUBPACKET_PER_ACK: usize = 10;

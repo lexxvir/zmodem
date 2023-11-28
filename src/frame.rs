@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //! ZMODEM transfer protocol frame
 
-use crate::consts::*;
 use crate::zerocopy::AsBytes;
+use crate::*;
 use core::convert::TryFrom;
 use std::fmt::{self, Display};
 
