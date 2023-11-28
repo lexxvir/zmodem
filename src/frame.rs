@@ -222,7 +222,10 @@ impl Frame {
             out.extend_from_slice(hex.as_bytes());
         }
 
-        escape_u8_array(&out.drain(3..).collect::<Vec<_>>(), &mut out);
+        let mut escaped = vec![];
+        escape_u8_array(&out[3..], &mut escaped);
+        out.truncate(3);
+        out.extend_from_slice(escaped.as_bytes());
 
         if header.encoding == Encoding::ZHEX {
             // Add trailing CRLF for ZHEX transfer:
