@@ -5,6 +5,7 @@ extern crate log;
 
 extern crate core;
 extern crate crc;
+extern crate fsmentry;
 extern crate hex;
 extern crate zerocopy;
 
@@ -12,13 +13,14 @@ mod frame;
 mod port;
 mod subpacket;
 
-pub mod recv;
-
 use core::convert::TryFrom;
 use crc::{Crc, CRC_16_XMODEM, CRC_32_ISO_HDLC};
 use frame::{Encoding, Frame, Header, Type};
 use hex::FromHex;
 use std::io::{self, BufRead, Read, Result, Seek, SeekFrom, Write};
+use std::str::from_utf8;
+use std::{thread, time};
+use stage::{Entry, Stage};
 
 pub const CRC16: Crc<u16> = Crc::<u16>::new(&CRC_16_XMODEM);
 pub const CRC32: Crc<u32> = Crc::<u32>::new(&CRC_32_ISO_HDLC);
@@ -44,6 +46,28 @@ pub const XON: u8 = 0x11;
 
 pub const SUBPACKET_SIZE: usize = 1024 * 8;
 pub const SUBPACKET_PER_ACK: usize = 10;
+
+/// Map the previous frame type of the sender and incoming frame type of the
+/// receiver to the next packet to be sent.
+///
+/// NOTE: ZRINIT is used here as a wait state, as the sender does not use it for
+/// other purposes. Other than tat the states map to the packets that the sender
+/// sends next.
+const fn send_next_state(sender: Option<Type>, receiver: Type) -> Option<Type> {
+    match (sender, receiver) {
+        (None, Type::ZRINIT) => Some(Type::ZFILE),
+        (None, _) => Some(Type::ZRQINIT),
+        (Some(Type::ZRQINIT), Type::ZRINIT) => Some(Type::ZFILE),
+        (Some(Type::ZFILE), Type::ZRPOS) => Some(Type::ZDATA),
+        (Some(Type::ZFILE), Type::ZRINIT) => Some(Type::ZRINIT),
+        (Some(Type::ZRINIT), Type::ZRPOS) => Some(Type::ZDATA),
+        (Some(Type::ZDATA), Type::ZACK) => Some(Type::ZDATA),
+        (Some(Type::ZDATA), Type::ZRPOS) => Some(Type::ZDATA),
+        (Some(Type::ZDATA), Type::ZRINIT) => Some(Type::ZFIN),
+        (Some(Type::ZFIN), Type::ZFIN) => None,
+        (_, _) => None,
+    }
+}
 
 /// Sends a file using the ZMODEM file transfer protocol.
 pub fn send<P, F>(port: &mut P, file: &mut F, filename: &str, filesize: Option<u32>) -> Result<()>
@@ -84,26 +108,96 @@ where
     Ok(())
 }
 
-/// Map the previous frame type of the sender and incoming frame type of the
-/// receiver to the next packet to be sent.
-///
-/// NOTE: ZRINIT is used here as a wait state, as the sender does not use it for
-/// other purposes. Other than tat the states map to the packets that the sender
-/// sends next.
-const fn send_next_state(sender: Option<Type>, receiver: Type) -> Option<Type> {
-    match (sender, receiver) {
-        (None, Type::ZRINIT) => Some(Type::ZFILE),
-        (None, _) => Some(Type::ZRQINIT),
-        (Some(Type::ZRQINIT), Type::ZRINIT) => Some(Type::ZFILE),
-        (Some(Type::ZFILE), Type::ZRPOS) => Some(Type::ZDATA),
-        (Some(Type::ZFILE), Type::ZRINIT) => Some(Type::ZRINIT),
-        (Some(Type::ZRINIT), Type::ZRPOS) => Some(Type::ZDATA),
-        (Some(Type::ZDATA), Type::ZACK) => Some(Type::ZDATA),
-        (Some(Type::ZDATA), Type::ZRPOS) => Some(Type::ZDATA),
-        (Some(Type::ZDATA), Type::ZRINIT) => Some(Type::ZFIN),
-        (Some(Type::ZFIN), Type::ZFIN) => None,
-        (_, _) => None,
+fsmentry::dsl! {
+    #[derive(Debug)]
+    pub Stage {
+        Waiting -> Ready -> Receiving;
     }
+}
+
+/// Receives a file using the ZMODEM file transfer protocol.
+pub fn recv<P, F>(port: &mut P, file: &mut F) -> Result<usize>
+where
+    P: Read + Write,
+    F: Write,
+{
+    let mut stage = Stage::new(stage::State::Waiting);
+    let mut port = port::Port::new(port);
+    let mut count = 0;
+
+    port.write_all(&Frame::new(&ZRINIT_HEADER).0)?;
+
+    loop {
+        if !skip_zpad(&mut port)? {
+            continue;
+        }
+
+        let frame = match parse_header(&mut port)? {
+            Some(frame) => frame,
+            None => {
+                if let Entry::Receiving = stage.entry() {
+                    port.write_all(&Frame::new(&ZRPOS_HEADER.with_count(count)).0)?;
+                } else {
+                    port.write_all(&Frame::new(&ZNAK_HEADER).0)?;
+                }
+                continue;
+            }
+        };
+
+        match stage.entry() {
+            Entry::Waiting(it) => match frame.frame_type() {
+                Type::ZFILE => {
+                    read_zfile(frame.encoding(), &count, &mut port)?;
+                    it.ready();
+                }
+                _ => {
+                    port.write_all(&Frame::new(&ZRINIT_HEADER).0)?;
+                }
+            },
+            Entry::Ready(it) => match frame.frame_type() {
+                Type::ZFILE => read_zfile(frame.encoding(), &count, &mut port)?,
+                Type::ZDATA => {
+                    if frame.count() != count
+                        || !read_zdata(frame.encoding() as u8, &mut count, &mut port, file)?
+                    {
+                        port.write_all(&Frame::new(&ZRPOS_HEADER.with_count(count)).0)?
+                    }
+                    it.receiving();
+                }
+                _ => (),
+            },
+            Entry::Receiving => {
+                match frame.frame_type() {
+                    Type::ZDATA => {
+                        if frame.count() != count
+                            || !read_zdata(frame.encoding() as u8, &mut count, &mut port, file)?
+                        {
+                            port.write_all(&Frame::new(&ZRPOS_HEADER.with_count(count)).0)?
+                        }
+                    }
+                    Type::ZEOF => {
+                        if frame.count() != count {
+                            log::error!(
+                                "ZEOF offset mismatch: frame({}) != recv({})",
+                                frame.count(),
+                                count
+                            );
+                        } else {
+                            port.write_all(&Frame::new(&ZRINIT_HEADER).0)?;
+                        }
+                    }
+                    Type::ZFIN => {
+                        port.write_all(&Frame::new(&ZFIN_HEADER).0)?;
+                        thread::sleep(time::Duration::from_millis(10)); // sleep a bit
+                        break;
+                    }
+                    _ => (),
+                }
+            }
+        }
+    }
+
+    Ok(count as usize)
 }
 
 /// Sends a ZFILE packet containing file's name and size.
@@ -155,6 +249,63 @@ where
     Ok(())
 }
 
+fn read_zfile<P>(encoding: Encoding, count: &u32, port: &mut P) -> Result<()>
+where
+    P: Write + BufRead,
+{
+    let mut buf = Vec::new();
+
+    if read_subpacket(encoding, port, &mut buf)?.is_none() {
+        port.write_all(&Frame::new(&ZNAK_HEADER).0)?;
+    } else {
+        port.write_all(&Frame::new(&ZRPOS_HEADER.with_count(*count)).0)?;
+
+        // TODO: Process supplied data.
+        if let Ok(s) = from_utf8(&buf) {
+            debug!(target: "proto", "ZFILE supplied data: {}", s);
+        }
+    }
+
+    Ok(())
+}
+
+fn read_zdata<P, F>(encoding: u8, count: &mut u32, port: &mut P, file: &mut F) -> Result<bool>
+where
+    P: Write + BufRead,
+    F: Write,
+{
+    let mut buf = Vec::new();
+
+    loop {
+        buf.clear();
+
+        let encoding = match encoding.try_into() {
+            Ok(encoding) => encoding,
+            Err(_) => return Ok(false),
+        };
+
+        let zcrc = match read_subpacket(encoding, port, &mut buf)? {
+            Some(x) => x,
+            None => return Ok(false),
+        };
+
+        file.write_all(&buf)?;
+        *count += buf.len() as u32;
+
+        match zcrc {
+            subpacket::Type::ZCRCW => {
+                port.write_all(&Frame::new(&ZACK_HEADER.with_count(*count)).0)?;
+                return Ok(true);
+            }
+            subpacket::Type::ZCRCE => return Ok(true),
+            subpacket::Type::ZCRCQ => {
+                port.write_all(&Frame::new(&ZACK_HEADER.with_count(*count)).0)?
+            }
+            subpacket::Type::ZCRCG => log::debug!("ZCRCG"),
+        }
+    }
+}
+
 pub fn escape(value: u8) -> Option<[u8; 2]> {
     Some(match value {
         0xFF => [ZDLE, ESC_FF],
@@ -190,7 +341,7 @@ pub fn escape_array(src: &[u8], dst: &mut Vec<u8>) {
 }
 
 /// Skips (ZPAD, [ZPAD,] ZDLE) sequence.
-pub fn skip_zpad<P>(port: &mut P) -> io::Result<bool>
+fn skip_zpad<P>(port: &mut P) -> io::Result<bool>
 where
     P: BufRead,
 {
@@ -209,7 +360,7 @@ where
     Ok(value == ZDLE)
 }
 
-pub fn parse_header<R>(mut r: R) -> io::Result<Option<Header>>
+fn parse_header<R>(mut r: R) -> io::Result<Option<Header>>
 where
     R: Read,
 {
@@ -272,7 +423,7 @@ where
 /// Receives sequence: <escaped data> ZDLE ZCRC* <CRC bytes>
 /// Unescapes sequencies such as 'ZDLE <escaped byte>'
 /// If Ok returns <unescaped data> in buf and ZCRC* byte as return value
-pub fn read_subpacket<F>(
+fn read_subpacket<F>(
     encoding: Encoding,
     file: &mut F,
     buf: &mut Vec<u8>,

@@ -23,5 +23,5 @@ fn main() {
         File::create(filename).unwrap_or_else(|_| panic!("Cannot create file {:?}:", filename));
 
     let mut inout = stdinout::CombinedStdInOut::new();
-    zmodem::recv::recv(&mut inout, &mut file).unwrap();
+    zmodem::recv(&mut inout, &mut file).unwrap();
 }
