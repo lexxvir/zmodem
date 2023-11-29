@@ -1,7 +1,7 @@
 use crate::{
     frame::{Frame, Header, Type},
-    parse_header, port, read_zdle_data, try_skip_zpad, ZACK_HEADER, ZCRCE, ZCRCG, ZCRCQ, ZCRCW,
-    ZFIN_HEADER, ZNAK_HEADER, ZRINIT_HEADER, ZRPOS_HEADER,
+    parse_header, port, read_zdle_data, subpacket, try_skip_zpad, ZACK_HEADER, ZFIN_HEADER,
+    ZNAK_HEADER, ZRINIT_HEADER, ZRPOS_HEADER,
 };
 use std::io::{BufRead, Read, Result, Write};
 use std::str::from_utf8;
@@ -158,17 +158,15 @@ where
         *count += buf.len() as u32;
 
         match zcrc {
-            ZCRCW => {
+            subpacket::Type::ZCRCW => {
                 port.write_all(&Frame::new(&ZACK_HEADER.with_count(*count)).0)?;
                 return Ok(true);
             }
-            ZCRCE => return Ok(true),
-            ZCRCQ => port.write_all(&Frame::new(&ZACK_HEADER.with_count(*count)).0)?,
-            ZCRCG => log::debug!("ZCRCG"),
-            _ => {
-                log::error!("unexpected ZCRC byte: {:02X}", zcrc);
-                return Ok(false);
+            subpacket::Type::ZCRCE => return Ok(true),
+            subpacket::Type::ZCRCQ => {
+                port.write_all(&Frame::new(&ZACK_HEADER.with_count(*count)).0)?
             }
+            subpacket::Type::ZCRCG => log::debug!("ZCRCG"),
         }
     }
 }

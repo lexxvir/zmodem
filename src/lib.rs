@@ -10,6 +10,7 @@ extern crate zerocopy;
 
 mod frame;
 mod port;
+mod subpacket;
 
 pub mod recv;
 
@@ -17,7 +18,6 @@ use core::convert::TryFrom;
 use crc::{Crc, CRC_16_XMODEM, CRC_32_ISO_HDLC};
 use frame::{Encoding, Frame, Header, Type};
 use hex::FromHex;
-use log::LogLevel::Debug;
 use std::io::{self, BufRead, ErrorKind, Read, Result, Seek, SeekFrom, Write};
 
 pub const CRC16: Crc<u16> = Crc::<u16>::new(&CRC_16_XMODEM);
@@ -39,12 +39,6 @@ pub const ZDLEE: u8 = 0x58;
 
 pub const ESC_FF: u8 = b'm';
 pub const ESC_7F: u8 = b'l';
-
-/* ZDLE sequences */
-pub const ZCRCE: u8 = b'h'; /* CRC next, frame ends, header packet follows */
-pub const ZCRCG: u8 = b'i'; /* CRC next, frame continues nonstop */
-pub const ZCRCQ: u8 = b'j'; /* CRC next, frame continues, ZACK expected */
-pub const ZCRCW: u8 = b'k'; /* CRC next, ZACK expected, end of frame */
 
 pub const XON: u8 = 0x11;
 
@@ -126,7 +120,7 @@ where
         data.extend_from_slice(size.to_string().as_bytes());
     }
     data.push(b'\0');
-    write_zdle_data(port, ZCRCW, &data)
+    write_zdle_data(port, subpacket::Type::ZCRCW, &data)
 }
 
 /// Write a ZDATA packet from the given file offset in the ZBIN32 format.
@@ -148,7 +142,7 @@ where
 
     port.write_all(&Frame::new(&ZDATA_HEADER.with_count(offset)).0)?;
     for _ in 1..SUBPACKET_PER_ACK {
-        write_zdle_data(port, ZCRCG, &data[..count])?;
+        write_zdle_data(port, subpacket::Type::ZCRCG, &data[..count])?;
         offset += count as u32;
 
         count = file.read(&mut data)?;
@@ -156,13 +150,9 @@ where
             break;
         }
     }
-    write_zdle_data(port, ZCRCW, &data[..count])?;
+    write_zdle_data(port, subpacket::Type::ZCRCW, &data[..count])?;
 
     Ok(())
-}
-
-pub fn is_escaped(byte: u8) -> bool {
-    !matches!(byte, ZCRCE | ZCRCG | ZCRCQ | ZCRCW)
 }
 
 pub fn escape(value: u8) -> Option<[u8; 2]> {
@@ -286,28 +276,35 @@ where
 /// Receives sequence: <escaped data> ZDLE ZCRC* <CRC bytes>
 /// Unescapes sequencies such as 'ZDLE <escaped byte>'
 /// If Ok returns <unescaped data> in buf and ZCRC* byte as return value
-pub fn read_zdle_data<R>(encoding: Encoding, r: &mut R, buf: &mut Vec<u8>) -> io::Result<Option<u8>>
+pub fn read_zdle_data<F>(
+    encoding: Encoding,
+    file: &mut F,
+    buf: &mut Vec<u8>,
+) -> io::Result<Option<subpacket::Type>>
 where
-    R: io::BufRead,
+    F: io::BufRead,
 {
+    let result;
+
     loop {
-        r.read_until(ZDLE, buf)?;
+        file.read_until(ZDLE, buf)?;
 
-        let mut b = [0; 1];
-        let b = r.read_exact(&mut b).map(|_| b[0])?;
+        let mut byte = [0; 1];
+        let byte = file.read_exact(&mut byte).map(|_| byte[0])?;
 
-        if !crate::is_escaped(b) {
-            *buf.last_mut().unwrap() = b; // replace ZDLE by ZCRC* byte
+        if let Ok(sp_type) = subpacket::Type::try_from(byte) {
+            *buf.last_mut().unwrap() = sp_type as u8;
+            result = Some(sp_type);
             break;
+        } else {
+            *buf.last_mut().unwrap() = unescape(byte);
         }
-
-        *buf.last_mut().unwrap() = crate::unescape(b);
     }
 
     let crc_len = if encoding == Encoding::ZBIN32 { 4 } else { 2 };
     let mut crc1 = vec![0; crc_len];
 
-    read_exact_unescaped(r, &mut crc1)?;
+    read_exact_unescaped(file, &mut crc1)?;
 
     let crc2 = match encoding {
         Encoding::ZBIN32 => CRC32.checksum(buf).to_le_bytes().to_vec(),
@@ -315,11 +312,14 @@ where
     };
 
     if crc1 != crc2 {
-        error!("crc mismatch: {:?} != {:?}", crc1, crc2);
+        log::debug!("CRC mismatch: {:?} != {:?}", crc1, crc2);
         return Ok(None);
     }
 
-    Ok(buf.pop()) // pop ZCRC* byte
+    // Pop ZCRC
+    buf.pop().unwrap();
+
+    Ok(result)
 }
 
 fn read_exact_unescaped<R>(mut r: R, buf: &mut [u8]) -> io::Result<()>
@@ -338,27 +338,16 @@ where
     Ok(())
 }
 
-fn write_zdle_data<W>(w: &mut W, zcrc_byte: u8, data: &[u8]) -> io::Result<()>
+fn write_zdle_data<P>(port: &mut P, subpacket_type: subpacket::Type, data: &[u8]) -> Result<()>
 where
-    W: Write,
+    P: Write,
 {
-    if log_enabled!(Debug) {
-        debug!(
-            "  ZCRC{} subpacket, size = {}",
-            match zcrc_byte {
-                ZCRCE => "E",
-                ZCRCG => "G",
-                ZCRCQ => "Q",
-                ZCRCW => "W",
-                _ => "?",
-            },
-            data.len()
-        );
-    }
+    let subpacket_type = subpacket_type as u8;
 
     let mut digest = CRC32.digest();
     digest.update(data);
-    digest.update(&[zcrc_byte]);
+    digest.update(&[subpacket_type]);
+
     // Assuming little-endian byte order, given that ZMODEM used to work on
     // VAX, which was a little-endian computer architecture:
     let crc = digest.finalize().to_le_bytes();
@@ -369,18 +358,23 @@ where
     crate::escape_array(data, &mut esc_data);
     crate::escape_array(&crc, &mut esc_crc);
 
-    w.write_all(&esc_data)?;
-    w.write_all(&[ZDLE, zcrc_byte])?;
-    w.write_all(&esc_crc)?;
+    port.write_all(&esc_data)?;
+    port.write_all(&[ZDLE, subpacket_type])?;
+    port.write_all(&esc_crc)?;
 
     Ok(())
 }
+
 #[cfg(test)]
 mod tests {
     use crate::{
         frame::{Encoding, Frame, Header, Type},
-        XON, ZCRCE, ZCRCQ, ZCRCW, ZDLE, ZPAD,
+        subpacket, XON, ZDLE, ZPAD,
     };
+
+    const ZCRCE: u8 = b'h';
+    const ZCRCQ: u8 = b'j';
+    const ZCRCW: u8 = b'k';
 
     #[rstest::rstest]
     #[case(Encoding::ZBIN, Type::ZRQINIT, &[ZPAD, ZDLE, Encoding::ZBIN as u8, 0, 0, 0, 0, 0, 0, 0])]
@@ -443,13 +437,13 @@ mod tests {
     }
 
     #[rstest::rstest]
-    #[case(Encoding::ZBIN, &[ZDLE, ZCRCE, 237, 174], Some(ZCRCE), &[])]
-    #[case(Encoding::ZBIN, &[ZDLE, 0x00, ZDLE, ZCRCW, 221, 205], Some(ZCRCW), &[0x00])]
-    #[case(Encoding::ZBIN32, &[0, 1, 2, 3, 4, ZDLE, 0x60, ZDLE, 0x60, ZDLE, ZCRCQ, 85, 114, 241, 70], Some(ZCRCQ), &[0, 1, 2, 3, 4, 0x20, 0x20])]
+    #[case(Encoding::ZBIN, &[ZDLE, ZCRCE, 237, 174], Some(subpacket::Type::ZCRCE), &[])]
+    #[case(Encoding::ZBIN, &[ZDLE, 0x00, ZDLE, ZCRCW, 221, 205], Some(subpacket::Type::ZCRCW), &[0x00])]
+    #[case(Encoding::ZBIN32, &[0, 1, 2, 3, 4, ZDLE, 0x60, ZDLE, 0x60, ZDLE, ZCRCQ, 85, 114, 241, 70], Some(subpacket::Type::ZCRCQ), &[0, 1, 2, 3, 4, 0x20, 0x20])]
     pub fn test_read_zdle_data(
         #[case] encoding: Encoding,
         #[case] input: &[u8],
-        #[case] expected_result: std::option::Option<u8>,
+        #[case] expected_result: std::option::Option<subpacket::Type>,
         #[case] expected_output: &[u8],
     ) {
         let input = input.to_vec();
