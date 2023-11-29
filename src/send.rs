@@ -16,7 +16,7 @@ const SUBPACKET_PER_ACK: usize = 10;
 /// NOTE: ZRINIT is used here as a wait state, as the sender does not use it for
 /// other purposes. Other than tat the states map to the packets that the sender
 /// sends next.
-const fn next_state(sender: Option<Type>, receiver: Type) -> Option<Type> {
+const fn send_next_state(sender: Option<Type>, receiver: Type) -> Option<Type> {
     match (sender, receiver) {
         (None, Type::ZRINIT) => Some(Type::ZFILE),
         (None, _) => Some(Type::ZRQINIT),
@@ -33,23 +33,20 @@ const fn next_state(sender: Option<Type>, receiver: Type) -> Option<Type> {
 }
 
 /// Sends a file using the ZMODEM file transfer protocol.
-pub fn send<RW, R>(rw: RW, r: &mut R, filename: &str, filesize: Option<u32>) -> Result<()>
+pub fn send<P, F>(port: P, file: &mut F, filename: &str, filesize: Option<u32>) -> Result<()>
 where
-    RW: Read + Write,
-    R: Read + Seek,
+    P: Read + Write,
+    F: Read + Seek,
 {
-    let mut port = port::Port::new(rw);
+    let mut port = port::Port::new(port);
     let mut state = None;
 
     port.write_all(&Frame::new(&ZRQINIT_HEADER).0)?;
-
     loop {
         port.flush()?;
-
         if !crate::try_skip_zpad(&mut port)? {
             continue;
         }
-
         let frame = match crate::parse_header(&mut port)? {
             Some(x) => x,
             None => {
@@ -57,13 +54,11 @@ where
                 continue;
             }
         };
-
-        state = next_state(state, frame.frame_type());
-
+        state = send_next_state(state, frame.frame_type());
         match state {
             Some(Type::ZRQINIT) => port.write_all(&Frame::new(&ZRQINIT_HEADER).0)?,
             Some(Type::ZFILE) => write_zfile(&mut port, filename, filesize)?,
-            Some(Type::ZDATA) => write_zdata(&mut port, r, &frame)?,
+            Some(Type::ZDATA) => write_zdata(&mut port, file, &frame)?,
             Some(Type::ZFIN) => port.write_all(&Frame::new(&ZFIN_HEADER).0)?,
             None => {
                 port.write_all("OO".as_bytes())?;
@@ -81,15 +76,16 @@ fn write_zfile<P>(port: &mut P, name: &str, maybe_size: Option<u32>) -> Result<(
 where
     P: Read + Write,
 {
+    let mut data = vec![];
+
     port.write_all(&Frame::new(&ZFILE_HEADER).0)?;
-
-    let mut data = format!("{}\0", name);
+    data.extend_from_slice(name.as_bytes());
+    data.push(b'\0');
     if let Some(size) = maybe_size {
-        data += &format!(" {}", size);
+        data.extend_from_slice(size.to_string().as_bytes());
     }
-    data += "\0";
-
-    write_zdle_data(port, ZCRCW, data.as_bytes())
+    data.push(b'\0');
+    write_zdle_data(port, ZCRCW, &data)
 }
 
 /// Write a ZDATA packet from the given file offset in the ZBIN32 format.
@@ -104,14 +100,12 @@ where
     file.seek(SeekFrom::Start(offset as u64))?;
 
     let mut count = file.read(&mut data)?;
-
     if count == 0 {
         port.write_all(&Frame::new(&ZEOF_HEADER.with_count(offset)).0)?;
         return Ok(());
     }
 
     port.write_all(&Frame::new(&ZDATA_HEADER.with_count(offset)).0)?;
-
     for _ in 1..SUBPACKET_PER_ACK {
         write_zdle_data(port, ZCRCG, &data[..count])?;
         offset += count as u32;
@@ -121,7 +115,7 @@ where
             break;
         }
     }
-
     write_zdle_data(port, ZCRCW, &data[..count])?;
+
     Ok(())
 }
