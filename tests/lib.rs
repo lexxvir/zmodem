@@ -101,7 +101,7 @@ fn send_to_rz() {
 
     sleep(Duration::from_millis(300));
 
-    zmodem::send::send(&mut inout, &mut cur, "send_to_rz", Some(len)).unwrap();
+    zmodem::send(&mut inout, &mut cur, "send_to_rz", Some(len)).unwrap();
 
     sleep(Duration::from_millis(300));
 
@@ -143,7 +143,7 @@ fn lib_send_recv() {
         let origin = RND_VALUES.clone();
         let mut c = Cursor::new(&origin);
 
-        zmodem::send::send(&mut inout, &mut c, "test", None).unwrap();
+        zmodem::send(&mut inout, &mut c, "test", None).unwrap();
     });
 
     let mut c = Cursor::new(Vec::new());

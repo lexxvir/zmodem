@@ -25,5 +25,5 @@ fn main() {
 
     let inout = stdinout::CombinedStdInOut::new();
 
-    zmodem::send::send(inout, &mut file, filename.to_str().unwrap(), size).unwrap();
+    zmodem::send(inout, &mut file, filename.to_str().unwrap(), size).unwrap();
 }
