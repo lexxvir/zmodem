@@ -51,30 +51,8 @@ pub const XON: u8 = 0x11;
 pub const SUBPACKET_SIZE: usize = 1024 * 8;
 pub const SUBPACKET_PER_ACK: usize = 10;
 
-/// Map the previous frame type of the sender and incoming frame type of the
-/// receiver to the next packet to be sent.
-///
-/// NOTE: ZRINIT is used here as a wait state, as the sender does not use it for
-/// other purposes. Other than tat the states map to the packets that the sender
-/// sends next.
-const fn send_next_state(sender: Option<Type>, receiver: Type) -> Option<Type> {
-    match (sender, receiver) {
-        (None, Type::ZRINIT) => Some(Type::ZFILE),
-        (None, _) => Some(Type::ZRQINIT),
-        (Some(Type::ZRQINIT), Type::ZRINIT) => Some(Type::ZFILE),
-        (Some(Type::ZFILE), Type::ZRPOS) => Some(Type::ZDATA),
-        (Some(Type::ZFILE), Type::ZRINIT) => Some(Type::ZRINIT),
-        (Some(Type::ZRINIT), Type::ZRPOS) => Some(Type::ZDATA),
-        (Some(Type::ZDATA), Type::ZACK) => Some(Type::ZDATA),
-        (Some(Type::ZDATA), Type::ZRPOS) => Some(Type::ZDATA),
-        (Some(Type::ZDATA), Type::ZRINIT) => Some(Type::ZFIN),
-        (Some(Type::ZFIN), Type::ZFIN) => None,
-        (_, _) => None,
-    }
-}
-
 /// Sends a file using the ZMODEM file transfer protocol.
-pub fn send<P, F>(port: P, file: &mut F, filename: &str, filesize: Option<u32>) -> Result<()>
+pub fn send<P, F>(port: &mut P, file: &mut F, filename: &str, filesize: Option<u32>) -> Result<()>
 where
     P: Read + Write,
     F: Read + Seek,
@@ -110,6 +88,28 @@ where
     }
 
     Ok(())
+}
+
+/// Map the previous frame type of the sender and incoming frame type of the
+/// receiver to the next packet to be sent.
+///
+/// NOTE: ZRINIT is used here as a wait state, as the sender does not use it for
+/// other purposes. Other than tat the states map to the packets that the sender
+/// sends next.
+const fn send_next_state(sender: Option<Type>, receiver: Type) -> Option<Type> {
+    match (sender, receiver) {
+        (None, Type::ZRINIT) => Some(Type::ZFILE),
+        (None, _) => Some(Type::ZRQINIT),
+        (Some(Type::ZRQINIT), Type::ZRINIT) => Some(Type::ZFILE),
+        (Some(Type::ZFILE), Type::ZRPOS) => Some(Type::ZDATA),
+        (Some(Type::ZFILE), Type::ZRINIT) => Some(Type::ZRINIT),
+        (Some(Type::ZRINIT), Type::ZRPOS) => Some(Type::ZDATA),
+        (Some(Type::ZDATA), Type::ZACK) => Some(Type::ZDATA),
+        (Some(Type::ZDATA), Type::ZRPOS) => Some(Type::ZDATA),
+        (Some(Type::ZDATA), Type::ZRINIT) => Some(Type::ZFIN),
+        (Some(Type::ZFIN), Type::ZFIN) => None,
+        (_, _) => None,
+    }
 }
 
 /// Sends a ZFILE packet containing file's name and size.
@@ -286,11 +286,7 @@ where
 /// Receives sequence: <escaped data> ZDLE ZCRC* <CRC bytes>
 /// Unescapes sequencies such as 'ZDLE <escaped byte>'
 /// If Ok returns <unescaped data> in buf and ZCRC* byte as return value
-pub fn recv_zdle_frame<R>(
-    encoding: Encoding,
-    r: &mut R,
-    buf: &mut Vec<u8>,
-) -> io::Result<Option<u8>>
+pub fn read_zdle_data<R>(encoding: Encoding, r: &mut R, buf: &mut Vec<u8>) -> io::Result<Option<u8>>
 where
     R: io::BufRead,
 {
@@ -450,7 +446,7 @@ mod tests {
     #[case(Encoding::ZBIN, &[ZDLE, ZCRCE, 237, 174], Some(ZCRCE), &[])]
     #[case(Encoding::ZBIN, &[ZDLE, 0x00, ZDLE, ZCRCW, 221, 205], Some(ZCRCW), &[0x00])]
     #[case(Encoding::ZBIN32, &[0, 1, 2, 3, 4, ZDLE, 0x60, ZDLE, 0x60, ZDLE, ZCRCQ, 85, 114, 241, 70], Some(ZCRCQ), &[0, 1, 2, 3, 4, 0x20, 0x20])]
-    pub fn test_recv_zdle_frame(
+    pub fn test_read_zdle_data(
         #[case] encoding: Encoding,
         #[case] input: &[u8],
         #[case] expected_result: std::option::Option<u8>,
@@ -460,7 +456,7 @@ mod tests {
         let mut output = vec![];
 
         assert_eq!(
-            crate::recv_zdle_frame(encoding, &mut input.as_slice(), &mut output).unwrap(),
+            crate::read_zdle_data(encoding, &mut input.as_slice(), &mut output).unwrap(),
             expected_result
         );
         assert_eq!(&output[..], expected_output);

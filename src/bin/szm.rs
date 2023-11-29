@@ -23,7 +23,7 @@ fn main() {
     let filename = Path::new(fileopt).file_name().unwrap();
     let size = file.metadata().map(|x| x.len() as u32).ok();
 
-    let inout = stdinout::CombinedStdInOut::new();
+    let mut inout = stdinout::CombinedStdInOut::new();
 
-    zmodem::send(inout, &mut file, filename.to_str().unwrap(), size).unwrap();
+    zmodem::send(&mut inout, &mut file, filename.to_str().unwrap(), size).unwrap();
 }

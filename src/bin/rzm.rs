@@ -19,9 +19,9 @@ fn main() {
 
     let fileopt = matches.value_of("file").unwrap_or("rz-out");
     let filename = Path::new(fileopt).file_name().unwrap();
-    let file =
+    let mut file =
         File::create(filename).unwrap_or_else(|_| panic!("Cannot create file {:?}:", filename));
 
-    let inout = stdinout::CombinedStdInOut::new();
-    zmodem::recv::recv(inout, file).unwrap();
+    let mut inout = stdinout::CombinedStdInOut::new();
+    zmodem::recv::recv(&mut inout, &mut file).unwrap();
 }
