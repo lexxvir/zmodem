@@ -356,6 +356,14 @@ where
     Ok(value == ZDLE)
 }
 
+const fn header_size(encoding: Encoding) -> usize {
+    match encoding {
+        Encoding::ZBIN => core::mem::size_of::<Header>() + 1,
+        Encoding::ZBIN32 => core::mem::size_of::<Header>() + 3,
+        Encoding::ZHEX => (core::mem::size_of::<Header>() + 1) * 2,
+    }
+}
+
 fn parse_header<R>(mut r: R) -> io::Result<Option<Header>>
 where
     R: Read,
@@ -366,18 +374,11 @@ where
 
     // Parse encoding byte:
     let encoding = match Encoding::try_from(enc_raw) {
-        Ok(enc) => enc,
+        Ok(encoding) => encoding,
         Err(_) => return Ok(None),
     };
 
-    let len = 1 + 4; // frame type + flags
-    let len = if encoding == Encoding::ZBIN32 { 4 } else { 2 } + len;
-    let len = if encoding == Encoding::ZHEX {
-        len * 2
-    } else {
-        len
-    };
-    let mut v: Vec<u8> = vec![0; len];
+    let mut v: Vec<u8> = vec![0; header_size(encoding)];
 
     read_exact_unescaped(r, &mut v)?;
 
