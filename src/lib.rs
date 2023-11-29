@@ -17,10 +17,9 @@ use core::convert::TryFrom;
 use crc::{Crc, CRC_16_XMODEM, CRC_32_ISO_HDLC};
 use frame::{Encoding, Frame, Header, Type};
 use hex::FromHex;
+use stage::{Entry, Stage};
 use std::io::{self, BufRead, Read, Result, Seek, SeekFrom, Write};
 use std::str::from_utf8;
-use std::{thread, time};
-use stage::{Entry, Stage};
 
 pub const CRC16: Crc<u16> = Crc::<u16>::new(&CRC_16_XMODEM);
 pub const CRC32: Crc<u32> = Crc::<u32>::new(&CRC_32_ISO_HDLC);
@@ -47,25 +46,10 @@ pub const XON: u8 = 0x11;
 pub const SUBPACKET_SIZE: usize = 1024 * 8;
 pub const SUBPACKET_PER_ACK: usize = 10;
 
-/// Map the previous frame type of the sender and incoming frame type of the
-/// receiver to the next packet to be sent.
-///
-/// NOTE: ZRINIT is used here as a wait state, as the sender does not use it for
-/// other purposes. Other than tat the states map to the packets that the sender
-/// sends next.
-const fn send_next_state(sender: Option<Type>, receiver: Type) -> Option<Type> {
-    match (sender, receiver) {
-        (None, Type::ZRINIT) => Some(Type::ZFILE),
-        (None, _) => Some(Type::ZRQINIT),
-        (Some(Type::ZRQINIT), Type::ZRINIT) => Some(Type::ZFILE),
-        (Some(Type::ZFILE), Type::ZRPOS) => Some(Type::ZDATA),
-        (Some(Type::ZFILE), Type::ZRINIT) => Some(Type::ZRINIT),
-        (Some(Type::ZRINIT), Type::ZRPOS) => Some(Type::ZDATA),
-        (Some(Type::ZDATA), Type::ZACK) => Some(Type::ZDATA),
-        (Some(Type::ZDATA), Type::ZRPOS) => Some(Type::ZDATA),
-        (Some(Type::ZDATA), Type::ZRINIT) => Some(Type::ZFIN),
-        (Some(Type::ZFIN), Type::ZFIN) => None,
-        (_, _) => None,
+fsmentry::dsl! {
+    #[derive(Debug)]
+    pub Stage {
+        Waiting -> Ready -> Receiving;
     }
 }
 
@@ -75,8 +59,8 @@ where
     P: Read + Write,
     F: Read + Seek,
 {
+    let mut stage = Stage::new(stage::State::Waiting);
     let mut port = port::Port::new(port);
-    let mut state = None;
 
     port.write_all(&Frame::new(&ZRQINIT_HEADER).0)?;
     loop {
@@ -91,28 +75,43 @@ where
                 continue;
             }
         };
-        state = send_next_state(state, frame.frame_type());
-        match state {
-            Some(Type::ZRQINIT) => port.write_all(&Frame::new(&ZRQINIT_HEADER).0)?,
-            Some(Type::ZFILE) => write_zfile(&mut port, filename, filesize)?,
-            Some(Type::ZDATA) => write_zdata(&mut port, file, &frame)?,
-            Some(Type::ZFIN) => port.write_all(&Frame::new(&ZFIN_HEADER).0)?,
-            None => {
-                port.write_all("OO".as_bytes())?;
-                break;
-            }
-            _ => (),
+
+        match stage.entry() {
+            Entry::Waiting(it) => match frame.frame_type() {
+                Type::ZRINIT => {
+                    write_zfile(&mut port, filename, filesize)?;
+                    it.ready();
+                }
+                _ => port.write_all(&Frame::new(&ZRQINIT_HEADER).0)?,
+            },
+            Entry::Ready(it) => match frame.frame_type() {
+                Type::ZRPOS => {
+                    write_zdata(&mut port, file, &frame)?;
+                    it.receiving();
+                }
+                Type::ZACK => {
+                    write_zdata(&mut port, file, &frame)?;
+                    it.receiving();
+                }
+                Type::ZRINIT => (),
+                _ => {
+                    port.write_all("OO".as_bytes())?;
+                    break;
+                }
+            },
+            Entry::Receiving => match frame.frame_type() {
+                Type::ZRPOS => write_zdata(&mut port, file, &frame)?,
+                Type::ZACK => write_zdata(&mut port, file, &frame)?,
+                Type::ZRINIT => port.write_all(&Frame::new(&ZFIN_HEADER).0)?,
+                _ => {
+                    port.write_all("OO".as_bytes())?;
+                    break;
+                }
+            },
         }
     }
 
     Ok(())
-}
-
-fsmentry::dsl! {
-    #[derive(Debug)]
-    pub Stage {
-        Waiting -> Ready -> Receiving;
-    }
 }
 
 /// Receives a file using the ZMODEM file transfer protocol.
@@ -166,34 +165,31 @@ where
                 }
                 _ => (),
             },
-            Entry::Receiving => {
-                match frame.frame_type() {
-                    Type::ZDATA => {
-                        if frame.count() != count
-                            || !read_zdata(frame.encoding() as u8, &mut count, &mut port, file)?
-                        {
-                            port.write_all(&Frame::new(&ZRPOS_HEADER.with_count(count)).0)?
-                        }
+            Entry::Receiving => match frame.frame_type() {
+                Type::ZDATA => {
+                    if frame.count() != count
+                        || !read_zdata(frame.encoding() as u8, &mut count, &mut port, file)?
+                    {
+                        port.write_all(&Frame::new(&ZRPOS_HEADER.with_count(count)).0)?
                     }
-                    Type::ZEOF => {
-                        if frame.count() != count {
-                            log::error!(
-                                "ZEOF offset mismatch: frame({}) != recv({})",
-                                frame.count(),
-                                count
-                            );
-                        } else {
-                            port.write_all(&Frame::new(&ZRINIT_HEADER).0)?;
-                        }
-                    }
-                    Type::ZFIN => {
-                        port.write_all(&Frame::new(&ZFIN_HEADER).0)?;
-                        thread::sleep(time::Duration::from_millis(10)); // sleep a bit
-                        break;
-                    }
-                    _ => (),
                 }
-            }
+                Type::ZEOF => {
+                    if frame.count() != count {
+                        log::error!(
+                            "ZEOF offset mismatch: frame({}) != recv({})",
+                            frame.count(),
+                            count
+                        );
+                    } else {
+                        port.write_all(&Frame::new(&ZRINIT_HEADER).0)?;
+                    }
+                }
+                Type::ZFIN => {
+                    port.write_all(&Frame::new(&ZFIN_HEADER).0)?;
+                    break;
+                }
+                _ => (),
+            },
         }
     }
 
