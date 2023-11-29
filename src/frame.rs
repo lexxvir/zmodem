@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //! ZMODEM transfer protocol frame
 
-use crate::{CRC16, CRC32, XON, ZDLE, ZPAD};
+use crate::{escape_array, CRC16, CRC32, XON, ZDLE, ZPAD};
 use core::convert::TryFrom;
 use std::fmt::{self, Display};
 use zerocopy::AsBytes;
@@ -153,6 +153,15 @@ impl Header {
         }
     }
 
+    /// Calculates the size when  with the CRC.
+    pub const fn encoded_size(encoding: Encoding) -> usize {
+        match encoding {
+            Encoding::ZBIN => core::mem::size_of::<Header>() + 2,
+            Encoding::ZBIN32 => core::mem::size_of::<Header>() + 4,
+            Encoding::ZHEX => (core::mem::size_of::<Header>() + 1) * 2 + 1,
+        }
+    }
+
     pub const fn encoding(&self) -> Encoding {
         self.encoding
     }
@@ -203,7 +212,7 @@ impl Frame {
         }
 
         let mut escaped = vec![];
-        crate::escape_array(&out[3..], &mut escaped);
+        escape_array(&out[3..], &mut escaped);
         out.truncate(3);
         out.extend_from_slice(escaped.as_bytes());
 

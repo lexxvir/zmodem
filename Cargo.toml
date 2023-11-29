@@ -13,6 +13,7 @@ env_logger = "0.4.2"
 hex = "0.4.3"
 log = "0.3.7"
 rstest = "0.18.2"
+tinyvec = "1.6.0"
 zerocopy = { version = "0.7.26", features = ["derive"] }
 
 [dev-dependencies]

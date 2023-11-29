@@ -66,7 +66,7 @@ where
         if !skip_zpad(&mut port)? {
             continue;
         }
-        let frame = match crate::parse_header(&mut port)? {
+        let frame = match parse_header(&mut port)? {
             Some(x) => x,
             None => {
                 port.write_all(&Frame::new(&ZNAK_HEADER).0)?;
@@ -354,14 +354,6 @@ where
     Ok(value == ZDLE)
 }
 
-const fn header_size(encoding: Encoding) -> usize {
-    match encoding {
-        Encoding::ZBIN => core::mem::size_of::<Header>() + 1,
-        Encoding::ZBIN32 => core::mem::size_of::<Header>() + 3,
-        Encoding::ZHEX => (core::mem::size_of::<Header>() + 1) * 2,
-    }
-}
-
 fn parse_header<R>(mut r: R) -> io::Result<Option<Header>>
 where
     R: Read,
@@ -376,7 +368,7 @@ where
         Err(_) => return Ok(None),
     };
 
-    let mut v: Vec<u8> = vec![0; header_size(encoding)];
+    let mut v: Vec<u8> = vec![0; Header::encoded_size(encoding) - 1];
 
     read_exact_unescaped(r, &mut v)?;
 
@@ -472,7 +464,7 @@ where
         let mut buf = [0; 1];
 
         *x = match r.read_exact(&mut buf).map(|_| buf[0])? {
-            ZDLE => crate::unescape(r.read_exact(&mut buf).map(|_| buf[0])?),
+            ZDLE => unescape(r.read_exact(&mut buf).map(|_| buf[0])?),
             y => y,
         };
     }
@@ -497,8 +489,8 @@ where
     let mut esc_data = vec![];
     let mut esc_crc = vec![];
 
-    crate::escape_array(data, &mut esc_data);
-    crate::escape_array(&crc, &mut esc_crc);
+    escape_array(data, &mut esc_data);
+    escape_array(&crc, &mut esc_crc);
 
     port.write_all(&esc_data)?;
     port.write_all(&[ZDLE, subpacket_type])?;
@@ -511,7 +503,7 @@ where
 mod tests {
     use crate::{
         frame::{Encoding, Frame, Header, Type},
-        subpacket, XON, ZDLE, ZPAD,
+        parse_header, read_subpacket, skip_zpad, subpacket, XON, ZDLE, ZPAD,
     };
 
     const ZCRCE: u8 = b'h';
@@ -553,10 +545,7 @@ mod tests {
     #[case(&[0; 100], Ok(false))]
     pub fn test_skip_zpad(#[case] data: &[u8], #[case] expected: std::io::Result<bool>) {
         let data = data.to_vec();
-        assert_eq!(
-            crate::skip_zpad(&mut data.as_slice()).is_err(),
-            expected.is_err()
-        );
+        assert_eq!(skip_zpad(&mut data.as_slice()).is_err(), expected.is_err());
     }
 
     #[rstest::rstest]
@@ -565,17 +554,14 @@ mod tests {
     #[case(&[Encoding::ZBIN32 as u8, Type::ZRINIT as u8, 0xa, 0xb, 0xc, 0xd, 0x99, 0xe2, 0xae, 0x4a], &Header::new(Encoding::ZBIN32, Type::ZRINIT, &[0xa, 0xb, 0xc, 0xd]))]
     #[case(&[Encoding::ZBIN as u8, Type::ZRINIT as u8, 0xa, ZDLE, b'l', 0xd, ZDLE, b'm', 0x5e, 0x6f], &Header::new(Encoding::ZBIN, Type::ZRINIT, &[0xa, 0x7f, 0xd, 0xff]))]
     pub fn test_parse_header(#[case] input: &[u8], #[case] expected: &Header) {
-        assert_eq!(
-            &mut crate::parse_header(&input[..]).unwrap().unwrap(),
-            expected
-        );
+        assert_eq!(&mut parse_header(&input[..]).unwrap().unwrap(), expected);
     }
 
     #[test]
     fn test_parse_header_none() {
         let frame = Type::ZRINIT;
         let i = [0xaa, frame as u8, 0xa, 0xb, 0xc, 0xd, 0xf, 0xf];
-        assert_eq!(crate::parse_header(&i[..]).unwrap_or(None), None);
+        assert_eq!(parse_header(&i[..]).unwrap_or(None), None);
     }
 
     #[rstest::rstest]
@@ -592,7 +578,7 @@ mod tests {
         let mut output = vec![];
 
         assert_eq!(
-            crate::read_subpacket(encoding, &mut input.as_slice(), &mut output).unwrap(),
+            read_subpacket(encoding, &mut input.as_slice(), &mut output).unwrap(),
             expected_result
         );
         assert_eq!(&output[..], expected_output);
