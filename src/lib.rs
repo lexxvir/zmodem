@@ -5,7 +5,6 @@ extern crate log;
 
 extern crate core;
 extern crate crc;
-extern crate fsmentry;
 extern crate hex;
 extern crate zerocopy;
 
@@ -17,7 +16,6 @@ use core::convert::TryFrom;
 use crc::{Crc, CRC_16_XMODEM, CRC_32_ISO_HDLC};
 use frame::{Encoding, Frame, Header, Type};
 use hex::FromHex;
-use stage::{Entry, Stage};
 use std::io::{self, BufRead, Read, Result, Seek, SeekFrom, Write};
 use std::str::from_utf8;
 
@@ -46,11 +44,11 @@ pub const XON: u8 = 0x11;
 pub const SUBPACKET_SIZE: usize = 1024 * 8;
 pub const SUBPACKET_PER_ACK: usize = 10;
 
-fsmentry::dsl! {
-    #[derive(Debug)]
-    pub Stage {
-        Waiting -> Ready -> Receiving;
-    }
+#[derive(PartialEq)]
+enum Stage {
+    Waiting,
+    Ready,
+    Receiving,
 }
 
 /// Sends a file using the ZMODEM file transfer protocol.
@@ -59,7 +57,7 @@ where
     P: Read + Write,
     F: Read + Seek,
 {
-    let mut stage = Stage::new(stage::State::Waiting);
+    let mut stage = Stage::Waiting;
     let mut port = port::Port::new(port);
 
     port.write_all(&Frame::new(&ZRQINIT_HEADER).0)?;
@@ -76,22 +74,22 @@ where
             }
         };
 
-        match stage.entry() {
-            Entry::Waiting(it) => match frame.frame_type() {
+        match stage {
+            Stage::Waiting => match frame.frame_type() {
                 Type::ZRINIT => {
                     write_zfile(&mut port, filename, filesize)?;
-                    it.ready();
+                    stage = Stage::Ready;
                 }
                 _ => port.write_all(&Frame::new(&ZRQINIT_HEADER).0)?,
             },
-            Entry::Ready(it) => match frame.frame_type() {
+            Stage::Ready => match frame.frame_type() {
                 Type::ZRPOS => {
                     write_zdata(&mut port, file, &frame)?;
-                    it.receiving();
+                    stage = Stage::Receiving;
                 }
                 Type::ZACK => {
                     write_zdata(&mut port, file, &frame)?;
-                    it.receiving();
+                    stage = Stage::Receiving;
                 }
                 Type::ZRINIT => (),
                 _ => {
@@ -99,7 +97,7 @@ where
                     break;
                 }
             },
-            Entry::Receiving => match frame.frame_type() {
+            Stage::Receiving => match frame.frame_type() {
                 Type::ZRPOS => write_zdata(&mut port, file, &frame)?,
                 Type::ZACK => write_zdata(&mut port, file, &frame)?,
                 Type::ZRINIT => port.write_all(&Frame::new(&ZFIN_HEADER).0)?,
@@ -120,7 +118,7 @@ where
     P: Read + Write,
     F: Write,
 {
-    let mut stage = Stage::new(stage::State::Waiting);
+    let mut stage = Stage::Waiting;
     let mut port = port::Port::new(port);
     let mut count = 0;
 
@@ -134,7 +132,7 @@ where
         let frame = match parse_header(&mut port)? {
             Some(frame) => frame,
             None => {
-                if let Entry::Receiving = stage.entry() {
+                if stage == Stage::Receiving {
                     port.write_all(&Frame::new(&ZRPOS_HEADER.with_count(count)).0)?;
                 } else {
                     port.write_all(&Frame::new(&ZNAK_HEADER).0)?;
@@ -143,17 +141,17 @@ where
             }
         };
 
-        match stage.entry() {
-            Entry::Waiting(it) => match frame.frame_type() {
+        match stage {
+            Stage::Waiting => match frame.frame_type() {
                 Type::ZFILE => {
                     read_zfile(frame.encoding(), &count, &mut port)?;
-                    it.ready();
+                    stage = Stage::Ready;
                 }
                 _ => {
                     port.write_all(&Frame::new(&ZRINIT_HEADER).0)?;
                 }
             },
-            Entry::Ready(it) => match frame.frame_type() {
+            Stage::Ready => match frame.frame_type() {
                 Type::ZFILE => read_zfile(frame.encoding(), &count, &mut port)?,
                 Type::ZDATA => {
                     if frame.count() != count
@@ -161,11 +159,11 @@ where
                     {
                         port.write_all(&Frame::new(&ZRPOS_HEADER.with_count(count)).0)?
                     }
-                    it.receiving();
+                    stage = Stage::Receiving;
                 }
                 _ => (),
             },
-            Entry::Receiving => match frame.frame_type() {
+            Stage::Receiving => match frame.frame_type() {
                 Type::ZDATA => {
                     if frame.count() != count
                         || !read_zdata(frame.encoding() as u8, &mut count, &mut port, file)?
