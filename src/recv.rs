@@ -159,22 +159,15 @@ where
 
         match zcrc {
             ZCRCW => {
-                let frame = Frame::new(&ZACK_HEADER.with_count(*count));
-                port.write_all(&frame.0)?;
+                port.write_all(&Frame::new(&ZACK_HEADER.with_count(*count)).0)?;
                 return Ok(true);
             }
-            ZCRCE => {
-                return Ok(true);
-            }
-            ZCRCQ => {
-                let frame = Frame::new(&ZACK_HEADER.with_count(*count));
-                port.write_all(&frame.0)?;
-            }
-            ZCRCG => {
-                log::debug!("ZCRCG");
-            }
+            ZCRCE => return Ok(true),
+            ZCRCQ => port.write_all(&Frame::new(&ZACK_HEADER.with_count(*count)).0)?,
+            ZCRCG => log::debug!("ZCRCG"),
             _ => {
-                panic!("unexpected ZCRC byte: {:02X}", zcrc);
+                log::error!("unexpected ZCRC byte: {:02X}", zcrc);
+                return Ok(false);
             }
         }
     }
