@@ -120,7 +120,7 @@ where
         data.extend_from_slice(size.to_string().as_bytes());
     }
     data.push(b'\0');
-    write_zdle_data(port, subpacket::Type::ZCRCW, &data)
+    write_subpacket(port, subpacket::Type::ZCRCW, &data)
 }
 
 /// Write a ZDATA packet from the given file offset in the ZBIN32 format.
@@ -142,7 +142,7 @@ where
 
     port.write_all(&Frame::new(&ZDATA_HEADER.with_count(offset)).0)?;
     for _ in 1..SUBPACKET_PER_ACK {
-        write_zdle_data(port, subpacket::Type::ZCRCG, &data[..count])?;
+        write_subpacket(port, subpacket::Type::ZCRCG, &data[..count])?;
         offset += count as u32;
 
         count = file.read(&mut data)?;
@@ -150,7 +150,7 @@ where
             break;
         }
     }
-    write_zdle_data(port, subpacket::Type::ZCRCW, &data[..count])?;
+    write_subpacket(port, subpacket::Type::ZCRCW, &data[..count])?;
 
     Ok(())
 }
@@ -272,7 +272,7 @@ where
 /// Receives sequence: <escaped data> ZDLE ZCRC* <CRC bytes>
 /// Unescapes sequencies such as 'ZDLE <escaped byte>'
 /// If Ok returns <unescaped data> in buf and ZCRC* byte as return value
-pub fn read_zdle_data<F>(
+pub fn read_subpacket<F>(
     encoding: Encoding,
     file: &mut F,
     buf: &mut Vec<u8>,
@@ -334,7 +334,7 @@ where
     Ok(())
 }
 
-fn write_zdle_data<P>(port: &mut P, subpacket_type: subpacket::Type, data: &[u8]) -> Result<()>
+fn write_subpacket<P>(port: &mut P, subpacket_type: subpacket::Type, data: &[u8]) -> Result<()>
 where
     P: Write,
 {
@@ -436,7 +436,7 @@ mod tests {
     #[case(Encoding::ZBIN, &[ZDLE, ZCRCE, 237, 174], Some(subpacket::Type::ZCRCE), &[])]
     #[case(Encoding::ZBIN, &[ZDLE, 0x00, ZDLE, ZCRCW, 221, 205], Some(subpacket::Type::ZCRCW), &[0x00])]
     #[case(Encoding::ZBIN32, &[0, 1, 2, 3, 4, ZDLE, 0x60, ZDLE, 0x60, ZDLE, ZCRCQ, 85, 114, 241, 70], Some(subpacket::Type::ZCRCQ), &[0, 1, 2, 3, 4, 0x20, 0x20])]
-    pub fn test_read_zdle_data(
+    pub fn test_read_subpacket(
         #[case] encoding: Encoding,
         #[case] input: &[u8],
         #[case] expected_result: std::option::Option<subpacket::Type>,
@@ -446,7 +446,7 @@ mod tests {
         let mut output = vec![];
 
         assert_eq!(
-            crate::read_zdle_data(encoding, &mut input.as_slice(), &mut output).unwrap(),
+            crate::read_subpacket(encoding, &mut input.as_slice(), &mut output).unwrap(),
             expected_result
         );
         assert_eq!(&output[..], expected_output);

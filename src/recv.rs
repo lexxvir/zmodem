@@ -1,6 +1,6 @@
 use crate::{
     frame::{Frame, Header, Type},
-    parse_header, port, read_zdle_data, subpacket, skip_zpad, ZACK_HEADER, ZFIN_HEADER,
+    parse_header, port, read_subpacket, skip_zpad, subpacket, ZACK_HEADER, ZFIN_HEADER,
     ZNAK_HEADER, ZRINIT_HEADER, ZRPOS_HEADER,
 };
 use std::io::{BufRead, Read, Result, Write};
@@ -94,7 +94,7 @@ where
             State::ProcessingZFILE => {
                 let mut buf = Vec::new();
 
-                if read_zdle_data(frame.encoding(), &mut port, &mut buf)?.is_none() {
+                if read_subpacket(frame.encoding(), &mut port, &mut buf)?.is_none() {
                     port.write_all(&Frame::new(&ZNAK_HEADER).0)?;
                 } else {
                     port.write_all(&Frame::new(&ZRPOS_HEADER.with_count(count)).0)?;
@@ -149,7 +149,7 @@ where
             Err(_) => return Ok(false),
         };
 
-        let zcrc = match read_zdle_data(encoding, port, &mut buf)? {
+        let zcrc = match read_subpacket(encoding, port, &mut buf)? {
             Some(x) => x,
             None => return Ok(false),
         };
