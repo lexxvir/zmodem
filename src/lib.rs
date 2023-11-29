@@ -1,13 +1,5 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-#[macro_use]
-extern crate log;
-
-extern crate core;
-extern crate crc;
-extern crate hex;
-extern crate zerocopy;
-
 mod frame;
 mod port;
 mod subpacket;
@@ -256,7 +248,7 @@ where
 
         // TODO: Process supplied data.
         if let Ok(s) = from_utf8(&buf) {
-            debug!(target: "proto", "ZFILE supplied data: {}", s);
+            log::debug!(target: "proto", "ZFILE supplied data: {}", s);
         }
     }
 
@@ -376,7 +368,7 @@ where
         v = match FromHex::from_hex(&v) {
             Ok(x) => x,
             _ => {
-                error!("from_hex error");
+                log::error!("from_hex error");
                 return Ok(None);
             }
         }
@@ -389,7 +381,7 @@ where
     };
 
     if crc1 != crc2 {
-        error!("crc mismatch: {:?} != {:?}", crc1, crc2);
+        log::error!("CRC mismatch: {:?} != {:?}", crc1, crc2);
         return Ok(None);
     }
 

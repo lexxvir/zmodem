@@ -1,4 +1,3 @@
-extern crate env_logger;
 extern crate log;
 extern crate zmodem;
 #[macro_use]
@@ -8,7 +7,6 @@ extern crate rand;
 use std::fs::{remove_file, File, OpenOptions};
 use std::io::*;
 use std::process::*;
-use std::result;
 use std::thread::{sleep, spawn};
 use std::time::*;
 
@@ -40,7 +38,6 @@ impl<R: Read, W: Write> Write for InOut<R, W> {
 }
 
 lazy_static! {
-    static ref LOG_INIT: result::Result<(), log::SetLoggerError> = env_logger::init();
     static ref RND_VALUES: Vec<u8> = {
         use rand::Rng;
         let mut rng = rand::thread_rng();
@@ -53,8 +50,6 @@ lazy_static! {
 #[test]
 #[cfg(unix)]
 fn recv_from_sz() {
-    let _ = LOG_INIT.is_ok();
-
     let mut f = File::create("recv_from_sz").unwrap();
     f.write_all(&RND_VALUES).unwrap();
 
@@ -81,8 +76,6 @@ fn recv_from_sz() {
 #[test]
 #[cfg(unix)]
 fn send_to_rz() {
-    let _ = LOG_INIT.is_ok();
-
     let _ = remove_file("send_to_rz");
 
     let sz = Command::new("rz")
@@ -116,8 +109,6 @@ fn send_to_rz() {
 #[test]
 #[cfg(unix)]
 fn lib_send_recv() {
-    let _ = LOG_INIT;
-
     let _ = remove_file("test-fifo1");
     let _ = remove_file("test-fifo2");
 

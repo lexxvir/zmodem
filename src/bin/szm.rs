@@ -1,7 +1,6 @@
 extern crate zmodem;
 
 extern crate clap;
-extern crate env_logger;
 extern crate log;
 
 mod stdinout;
@@ -11,8 +10,6 @@ use std::fs::File;
 use std::path::Path;
 
 fn main() {
-    env_logger::init().unwrap();
-
     let matches = App::new("Pure Rust implementation of sz utility")
         .arg(Arg::with_name("file").required(true).index(1))
         .get_matches();
