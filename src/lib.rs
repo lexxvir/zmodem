@@ -18,7 +18,7 @@ use core::convert::TryFrom;
 use crc::{Crc, CRC_16_XMODEM, CRC_32_ISO_HDLC};
 use frame::{Encoding, Frame, Header, Type};
 use hex::FromHex;
-use std::io::{self, BufRead, ErrorKind, Read, Result, Seek, SeekFrom, Write};
+use std::io::{self, BufRead, Read, Result, Seek, SeekFrom, Write};
 
 pub const CRC16: Crc<u16> = Crc::<u16>::new(&CRC_16_XMODEM);
 pub const CRC32: Crc<u32> = Crc::<u32>::new(&CRC_32_ISO_HDLC);
@@ -57,7 +57,7 @@ where
     port.write_all(&Frame::new(&ZRQINIT_HEADER).0)?;
     loop {
         port.flush()?;
-        if !crate::try_skip_zpad(&mut port)? {
+        if !skip_zpad(&mut port)? {
             continue;
         }
         let frame = match crate::parse_header(&mut port)? {
@@ -190,27 +190,23 @@ pub fn escape_array(src: &[u8], dst: &mut Vec<u8>) {
 }
 
 /// Skips (ZPAD, [ZPAD,] ZDLE) sequence.
-pub fn try_skip_zpad<P>(port: &mut P) -> io::Result<bool>
+pub fn skip_zpad<P>(port: &mut P) -> io::Result<bool>
 where
     P: BufRead,
 {
-    let mut read_buf = [0; 1];
+    let mut buf = [0; 1];
 
-    let mut value = port.read_exact(&mut read_buf).map(|_| read_buf[0])?;
+    let mut value = port.read_exact(&mut buf).map(|_| buf[0])?;
     if value != ZPAD {
         return Ok(false);
     }
 
-    value = port.read_exact(&mut read_buf).map(|_| read_buf[0])?;
+    value = port.read_exact(&mut buf).map(|_| buf[0])?;
     if value == ZPAD {
-        value = port.read_exact(&mut read_buf).map(|_| read_buf[0])?;
+        value = port.read_exact(&mut buf).map(|_| buf[0])?;
     }
 
-    if value == ZDLE {
-        Ok(true)
-    } else {
-        Err(ErrorKind::InvalidData.into())
-    }
+    Ok(value == ZDLE)
 }
 
 pub fn parse_header<R>(mut r: R) -> io::Result<Option<Header>>
@@ -409,10 +405,10 @@ mod tests {
     #[case(&[ZDLE], Ok(true))]
     #[case(&[], Err(std::io::ErrorKind::InvalidData.into()))]
     #[case(&[0; 100], Ok(false))]
-    pub fn test_try_skip_zpad(#[case] data: &[u8], #[case] expected: std::io::Result<bool>) {
+    pub fn test_skip_zpad(#[case] data: &[u8], #[case] expected: std::io::Result<bool>) {
         let data = data.to_vec();
         assert_eq!(
-            crate::try_skip_zpad(&mut data.as_slice()).is_err(),
+            crate::skip_zpad(&mut data.as_slice()).is_err(),
             expected.is_err()
         );
     }

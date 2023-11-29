@@ -1,6 +1,6 @@
 use crate::{
     frame::{Frame, Header, Type},
-    parse_header, port, read_zdle_data, subpacket, try_skip_zpad, ZACK_HEADER, ZFIN_HEADER,
+    parse_header, port, read_zdle_data, subpacket, skip_zpad, ZACK_HEADER, ZFIN_HEADER,
     ZNAK_HEADER, ZRINIT_HEADER, ZRPOS_HEADER,
 };
 use std::io::{BufRead, Read, Result, Write};
@@ -66,7 +66,7 @@ where
     port.write_all(&Frame::new(&ZRINIT_HEADER).0)?;
 
     while state != State::Done {
-        if !try_skip_zpad(&mut port)? {
+        if !skip_zpad(&mut port)? {
             continue;
         }
 
