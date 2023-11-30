@@ -7,6 +7,107 @@ use std::fmt::{self, Display};
 use tinyvec::{array_vec, ArrayVec};
 use zerocopy::AsBytes;
 
+pub struct Frame(pub ArrayVec<[u8; Header::encoded_size(Encoding::ZHEX) + 6]>);
+
+impl Frame {
+    pub fn new(header: &Header) -> Self {
+        let mut out = array_vec!([u8; Header::encoded_size(Encoding::ZHEX) + 6]);
+
+        out.push(ZPAD);
+        if header.encoding == Encoding::ZHEX {
+            out.push(ZPAD);
+        }
+
+        out.push(ZDLE);
+        out.extend_from_slice(header.as_bytes());
+
+        // Skips ZPAD and encoding:
+        match header.encoding {
+            Encoding::ZBIN32 => out.extend_from_slice(&CRC32.checksum(&out[3..]).to_le_bytes()),
+            Encoding::ZHEX => out.extend_from_slice(&CRC16.checksum(&out[4..]).to_be_bytes()),
+            _ => out.extend_from_slice(&CRC16.checksum(&out[3..]).to_be_bytes()),
+        };
+
+        // Skips ZPAD and encoding:
+        if header.encoding == Encoding::ZHEX {
+            let hex = hex::encode(&out[4..]);
+            out.truncate(4);
+            out.extend_from_slice(hex.as_bytes());
+        }
+
+        let mut escaped = vec![];
+        escape_array(&out[3..], &mut escaped);
+        out.truncate(3);
+        out.extend_from_slice(escaped.as_bytes());
+
+        if header.encoding == Encoding::ZHEX {
+            // Add trailing CRLF for ZHEX transfer:
+            out.extend_from_slice(b"\r\n");
+
+            if header.frame_type != Type::ZACK && header.frame_type != Type::ZFIN {
+                out.push(XON);
+            }
+        }
+
+        Self(out)
+    }
+}
+
+#[repr(C)]
+#[derive(AsBytes, Clone, Copy, Debug, PartialEq)]
+pub struct Header {
+    encoding: Encoding,
+    frame_type: Type,
+    flags: [u8; 4],
+}
+
+impl Header {
+    pub const fn new(encoding: Encoding, frame_type: Type, flags: &[u8; 4]) -> Header {
+        Header {
+            encoding,
+            frame_type,
+            flags: *flags,
+        }
+    }
+
+    pub const fn with_count(&self, count: u32) -> Self {
+        Header {
+            encoding: self.encoding,
+            frame_type: self.frame_type,
+            flags: count.to_le_bytes(),
+        }
+    }
+
+    /// Returns encoded size of the header when it is streamed to the serial link.
+    pub const fn encoded_size(encoding: Encoding) -> usize {
+        match encoding {
+            Encoding::ZBIN => core::mem::size_of::<Header>() + 2,
+            Encoding::ZBIN32 => core::mem::size_of::<Header>() + 4,
+            // Encoding is stored as a single byte also for ZHEX, thus the
+            // subtraction:
+            Encoding::ZHEX => (core::mem::size_of::<Header>() + 2) * 2 - 1,
+        }
+    }
+
+    pub const fn encoding(&self) -> Encoding {
+        self.encoding
+    }
+
+    pub const fn frame_type(&self) -> Type {
+        self.frame_type
+    }
+
+    pub const fn count(&self) -> u32 {
+        u32::from_le_bytes(self.flags)
+    }
+}
+
+impl fmt::Display for Header {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:8} {}", self.encoding, self.frame_type)
+    }
+}
+
 #[repr(u8)]
 #[allow(clippy::upper_case_acronyms)]
 #[derive(AsBytes, Clone, Copy, Debug, PartialEq)]
@@ -126,106 +227,5 @@ impl TryFrom<u8> for Type {
 impl Display for Type {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{:#02x}", *self as u8)
-    }
-}
-
-#[repr(C)]
-#[derive(AsBytes, Clone, Copy, Debug, PartialEq)]
-pub struct Header {
-    encoding: Encoding,
-    frame_type: Type,
-    flags: [u8; 4],
-}
-
-impl Header {
-    pub const fn new(encoding: Encoding, frame_type: Type, flags: &[u8; 4]) -> Header {
-        Header {
-            encoding,
-            frame_type,
-            flags: *flags,
-        }
-    }
-
-    pub const fn with_count(&self, count: u32) -> Self {
-        Header {
-            encoding: self.encoding,
-            frame_type: self.frame_type,
-            flags: count.to_le_bytes(),
-        }
-    }
-
-    /// Returns encoded size of the header when it is streamed to the serial link.
-    pub const fn encoded_size(encoding: Encoding) -> usize {
-        match encoding {
-            Encoding::ZBIN => core::mem::size_of::<Header>() + 2,
-            Encoding::ZBIN32 => core::mem::size_of::<Header>() + 4,
-            // Encoding is stored as a single byte also for ZHEX, thus the
-            // subtraction:
-            Encoding::ZHEX => (core::mem::size_of::<Header>() + 2) * 2 - 1,
-        }
-    }
-
-    pub const fn encoding(&self) -> Encoding {
-        self.encoding
-    }
-
-    pub const fn frame_type(&self) -> Type {
-        self.frame_type
-    }
-
-    pub const fn count(&self) -> u32 {
-        u32::from_le_bytes(self.flags)
-    }
-}
-
-impl fmt::Display for Header {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{:8} {}", self.encoding, self.frame_type)
-    }
-}
-
-pub struct Frame(pub ArrayVec<[u8; Header::encoded_size(Encoding::ZHEX) + 6]>);
-
-impl Frame {
-    pub fn new(header: &Header) -> Self {
-        let mut out = array_vec!([u8; Header::encoded_size(Encoding::ZHEX) + 6]);
-
-        out.push(ZPAD);
-        if header.encoding == Encoding::ZHEX {
-            out.push(ZPAD);
-        }
-
-        out.push(ZDLE);
-        out.extend_from_slice(header.as_bytes());
-
-        // Skips ZPAD and encoding:
-        match header.encoding {
-            Encoding::ZBIN32 => out.extend_from_slice(&CRC32.checksum(&out[3..]).to_le_bytes()),
-            Encoding::ZHEX => out.extend_from_slice(&CRC16.checksum(&out[4..]).to_be_bytes()),
-            _ => out.extend_from_slice(&CRC16.checksum(&out[3..]).to_be_bytes()),
-        };
-
-        // Skips ZPAD and encoding:
-        if header.encoding == Encoding::ZHEX {
-            let hex = hex::encode(&out[4..]);
-            out.truncate(4);
-            out.extend_from_slice(hex.as_bytes());
-        }
-
-        let mut escaped = vec![];
-        escape_array(&out[3..], &mut escaped);
-        out.truncate(3);
-        out.extend_from_slice(escaped.as_bytes());
-
-        if header.encoding == Encoding::ZHEX {
-            // Add trailing CRLF for ZHEX transfer:
-            out.extend_from_slice(b"\r\n");
-
-            if header.frame_type != Type::ZACK && header.frame_type != Type::ZFIN {
-                out.push(XON);
-            }
-        }
-
-        Self(out)
     }
 }
