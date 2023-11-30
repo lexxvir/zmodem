@@ -4,6 +4,7 @@
 use crate::{escape_array, CRC16, CRC32, XON, ZDLE, ZPAD};
 use core::convert::TryFrom;
 use std::fmt::{self, Display};
+use tinyvec::{array_vec, ArrayVec};
 use zerocopy::AsBytes;
 
 #[repr(u8)]
@@ -158,7 +159,9 @@ impl Header {
         match encoding {
             Encoding::ZBIN => core::mem::size_of::<Header>() + 2,
             Encoding::ZBIN32 => core::mem::size_of::<Header>() + 4,
-            Encoding::ZHEX => (core::mem::size_of::<Header>() + 2) * 2 - 1
+            // Encoding is stored as a single byte also for ZHEX, thus the
+            // subtraction:
+            Encoding::ZHEX => (core::mem::size_of::<Header>() + 2) * 2 - 1,
         }
     }
 
@@ -181,13 +184,11 @@ impl fmt::Display for Header {
     }
 }
 
-#[allow(dead_code)]
-pub struct Frame(pub Vec<u8>);
+pub struct Frame(pub ArrayVec<[u8; Header::encoded_size(Encoding::ZHEX) + 6]>);
 
 impl Frame {
-    #[allow(dead_code)]
     pub fn new(header: &Header) -> Self {
-        let mut out = vec![];
+        let mut out = array_vec!([u8; Header::encoded_size(Encoding::ZHEX) + 6]);
 
         out.push(ZPAD);
         if header.encoding == Encoding::ZHEX {
