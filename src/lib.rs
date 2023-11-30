@@ -385,11 +385,8 @@ where
         return Ok(None);
     }
 
-    // Read encoding byte:
-    let ft_raw: u8 = v[0];
-
-    // Parse encoding byte:
-    let ft = match Type::try_from(ft_raw) {
+    // Read and parse frame tpye:
+    let ft = match Type::try_from(v[0]) {
         Ok(ft) => ft,
         Err(_) => return Ok(None),
     };

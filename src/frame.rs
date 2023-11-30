@@ -153,12 +153,12 @@ impl Header {
         }
     }
 
-    /// Calculates the size when  with the CRC.
+    /// Returns encoded size of the header when it is streamed to the serial link.
     pub const fn encoded_size(encoding: Encoding) -> usize {
         match encoding {
             Encoding::ZBIN => core::mem::size_of::<Header>() + 2,
             Encoding::ZBIN32 => core::mem::size_of::<Header>() + 4,
-            Encoding::ZHEX => (core::mem::size_of::<Header>() + 1) * 2 + 1,
+            Encoding::ZHEX => (core::mem::size_of::<Header>() + 2) * 2 - 1
         }
     }
 
