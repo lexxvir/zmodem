@@ -199,7 +199,7 @@ where
         data.extend_from_slice(size.to_string().as_bytes());
     }
     data.push(b'\0');
-    write_subpacket(port, subpacket::Type::ZCRCW, &data)
+    write_subpacket(port, Encoding::ZBIN32, subpacket::Type::ZCRCW, &data)
 }
 
 /// Write a ZDATA packet from the given file offset in the ZBIN32 format.
@@ -221,7 +221,12 @@ where
 
     port.write_all(&Frame::new(&ZDATA_HEADER.with_count(offset)).0)?;
     for _ in 1..SUBPACKET_PER_ACK {
-        write_subpacket(port, subpacket::Type::ZCRCG, &data[..count])?;
+        write_subpacket(
+            port,
+            Encoding::ZBIN32,
+            subpacket::Type::ZCRCG,
+            &data[..count],
+        )?;
         offset += count as u32;
 
         count = file.read(&mut data)?;
@@ -229,7 +234,12 @@ where
             break;
         }
     }
-    write_subpacket(port, subpacket::Type::ZCRCW, &data[..count])?;
+    write_subpacket(
+        port,
+        Encoding::ZBIN32,
+        subpacket::Type::ZCRCW,
+        &data[..count],
+    )?;
 
     Ok(())
 }
@@ -240,7 +250,7 @@ where
 {
     let mut buf = Vec::new();
 
-    if read_subpacket(encoding, port, &mut buf)?.is_none() {
+    if read_subpacket(port, encoding, &mut buf)?.is_none() {
         port.write_all(&Frame::new(&ZNAK_HEADER).0)?;
     } else {
         port.write_all(&Frame::new(&ZRPOS_HEADER.with_count(*count)).0)?;
@@ -269,7 +279,7 @@ where
             Err(_) => return Ok(false),
         };
 
-        let zcrc = match read_subpacket(encoding, port, &mut buf)? {
+        let zcrc = match read_subpacket(port, encoding, &mut buf)? {
             Some(x) => x,
             None => return Ok(false),
         };
@@ -399,26 +409,24 @@ where
     Ok(Some(header))
 }
 
-/// Receives sequence: <escaped data> ZDLE ZCRC* <CRC bytes>
-/// Unescapes sequencies such as 'ZDLE <escaped byte>'
-/// If Ok returns <unescaped data> in buf and ZCRC* byte as return value
-fn read_subpacket<F>(
+/// Reads and unescapes a ZMODEM protocol subpacket
+fn read_subpacket<P>(
+    port: &mut P,
     encoding: Encoding,
-    file: &mut F,
     buf: &mut Vec<u8>,
 ) -> io::Result<Option<subpacket::Type>>
 where
-    F: io::BufRead,
+    P: BufRead,
 {
     let result;
 
     loop {
         // FIXME: To be aligned with the ZMODEM specification 0x11, 0x91, 0x13
         // and 0x93 should be ignored here.
-        file.read_until(ZDLE, buf)?;
+        port.read_until(ZDLE, buf)?;
 
         let mut byte = [0; 1];
-        let byte = file.read_exact(&mut byte).map(|_| byte[0])?;
+        let byte = port.read_exact(&mut byte).map(|_| byte[0])?;
 
         if let Ok(sp_type) = subpacket::Type::try_from(byte) {
             *buf.last_mut().unwrap() = sp_type as u8;
@@ -432,7 +440,7 @@ where
     let crc_len = if encoding == Encoding::ZBIN32 { 4 } else { 2 };
     let mut crc1 = vec![0; crc_len];
 
-    read_exact_unescaped(file, &mut crc1)?;
+    read_exact_unescaped(port, &mut crc1)?;
 
     let crc2 = match encoding {
         Encoding::ZBIN32 => CRC32.checksum(buf).to_le_bytes().to_vec(),
@@ -466,26 +474,41 @@ where
     Ok(())
 }
 
-fn write_subpacket<P>(port: &mut P, subpacket_type: subpacket::Type, data: &[u8]) -> Result<()>
+fn write_subpacket<P>(
+    port: &mut P,
+    encoding: Encoding,
+    subpacket_type: subpacket::Type,
+    data: &[u8],
+) -> Result<()>
 where
     P: Write,
 {
     let subpacket_type = subpacket_type as u8;
 
-    let mut digest = CRC32.digest();
-    digest.update(data);
-    digest.update(&[subpacket_type]);
-
-    // ZBIN32
-    let crc = digest.finalize().to_le_bytes();
-
     let mut esc_data = vec![];
+    escape_array(data, &mut esc_data);
+    port.write_all(&esc_data)?;
+
     let mut esc_crc = vec![];
 
-    escape_array(data, &mut esc_data);
-    escape_array(&crc, &mut esc_crc);
+    match encoding {
+        Encoding::ZBIN32 => {
+            let mut digest = CRC32.digest();
+            digest.update(data);
+            digest.update(&[subpacket_type]);
+            escape_array(&digest.finalize().to_le_bytes(), &mut esc_crc)
+        }
+        Encoding::ZBIN => {
+            let mut digest = CRC16.digest();
+            digest.update(data);
+            digest.update(&[subpacket_type]);
+            escape_array(&digest.finalize().to_be_bytes(), &mut esc_crc)
+        }
+        Encoding::ZHEX => {
+            unimplemented!()
+        }
+    };
 
-    port.write_all(&esc_data)?;
     port.write_all(&[ZDLE, subpacket_type])?;
     port.write_all(&esc_crc)?;
 
@@ -496,12 +519,8 @@ where
 mod tests {
     use crate::{
         frame::{Encoding, Frame, Header, Type},
-        parse_header, read_subpacket, skip_zpad, subpacket, XON, ZDLE, ZPAD,
+        parse_header, read_subpacket, skip_zpad, subpacket, write_subpacket, XON, ZDLE, ZPAD,
     };
-
-    const ZCRCE: u8 = b'h';
-    const ZCRCQ: u8 = b'j';
-    const ZCRCW: u8 = b'k';
 
     #[rstest::rstest]
     #[case(Encoding::ZBIN, Type::ZRQINIT, &[ZPAD, ZDLE, Encoding::ZBIN as u8, 0, 0, 0, 0, 0, 0, 0])]
@@ -558,22 +577,23 @@ mod tests {
     }
 
     #[rstest::rstest]
-    #[case(Encoding::ZBIN, &[ZDLE, ZCRCE, 237, 174], Some(subpacket::Type::ZCRCE), &[])]
-    #[case(Encoding::ZBIN, &[ZDLE, 0x00, ZDLE, ZCRCW, 221, 205], Some(subpacket::Type::ZCRCW), &[0x00])]
-    #[case(Encoding::ZBIN32, &[0, 1, 2, 3, 4, ZDLE, 0x60, ZDLE, 0x60, ZDLE, ZCRCQ, 144, 176, 18, 198], Some(subpacket::Type::ZCRCQ), &[0, 1, 2, 3, 4, 0x60, 0x60])]
-    pub fn test_read_subpacket(
+    #[case(Encoding::ZBIN, subpacket::Type::ZCRCE, &[])]
+    #[case(Encoding::ZBIN, subpacket::Type::ZCRCW, &[0x00])]
+    #[case(Encoding::ZBIN32, subpacket::Type::ZCRCQ, &[0, 1, 2, 3, 4, 0x60, 0x60])]
+    pub fn test_write_read_subpacket(
         #[case] encoding: Encoding,
-        #[case] input: &[u8],
-        #[case] expected_result: std::option::Option<subpacket::Type>,
-        #[case] expected_output: &[u8],
+        #[case] subpacket_type: subpacket::Type,
+        #[case] data: &[u8],
     ) {
-        let input = input.to_vec();
+        let mut port = vec![];
         let mut output = vec![];
 
+        write_subpacket(&mut port, encoding, subpacket_type, data).unwrap();
         assert_eq!(
-            read_subpacket(encoding, &mut input.as_slice(), &mut output).unwrap(),
-            expected_result
+            read_subpacket(&mut port.as_slice(), encoding, &mut output).unwrap(),
+            Some(subpacket_type)
         );
-        assert_eq!(&output[..], expected_output);
+
+        assert_eq!(&output[..], data);
     }
 }

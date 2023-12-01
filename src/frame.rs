@@ -26,7 +26,7 @@ impl Frame {
         match header.encoding {
             Encoding::ZBIN32 => out.extend_from_slice(&CRC32.checksum(&out[3..]).to_le_bytes()),
             Encoding::ZHEX => out.extend_from_slice(&CRC16.checksum(&out[4..]).to_be_bytes()),
-            _ => out.extend_from_slice(&CRC16.checksum(&out[3..]).to_be_bytes()),
+            Encoding::ZBIN => out.extend_from_slice(&CRC16.checksum(&out[3..]).to_be_bytes()),
         };
 
         // Skips ZPAD and encoding:
