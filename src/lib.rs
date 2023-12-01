@@ -309,7 +309,8 @@ pub const fn unescape(value: u8) -> u8 {
         0x6d => 0xff,
         0x6c => 0x7f,
         _ => {
-            if value & 0x60 != 0 {
+            // Bit 6 must be set and bit 5 *reset*:
+            if value & 0x60 == 0x40 {
                 value ^ 0x40
             } else {
                 value
@@ -559,7 +560,7 @@ mod tests {
     #[rstest::rstest]
     #[case(Encoding::ZBIN, &[ZDLE, ZCRCE, 237, 174], Some(subpacket::Type::ZCRCE), &[])]
     #[case(Encoding::ZBIN, &[ZDLE, 0x00, ZDLE, ZCRCW, 221, 205], Some(subpacket::Type::ZCRCW), &[0x00])]
-    #[case(Encoding::ZBIN32, &[0, 1, 2, 3, 4, ZDLE, 0x60, ZDLE, 0x60, ZDLE, ZCRCQ, 85, 114, 241, 70], Some(subpacket::Type::ZCRCQ), &[0, 1, 2, 3, 4, 0x20, 0x20])]
+    #[case(Encoding::ZBIN32, &[0, 1, 2, 3, 4, ZDLE, 0x60, ZDLE, 0x60, ZDLE, ZCRCQ, 144, 176, 18, 198], Some(subpacket::Type::ZCRCQ), &[0, 1, 2, 3, 4, 0x60, 0x60])]
     pub fn test_read_subpacket(
         #[case] encoding: Encoding,
         #[case] input: &[u8],
