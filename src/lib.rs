@@ -91,13 +91,13 @@ impl FrameHeader {
         u32::from_le_bytes(self.flags)
     }
 
-    pub fn read<R>(r: &mut R) -> io::Result<FrameHeader>
+    pub fn read<P>(port: &mut P) -> io::Result<FrameHeader>
     where
-        R: Read,
+        P: Read,
     {
         // Read encoding byte:
         let mut enc_raw = [0; 1];
-        let enc_raw = r.read_exact(&mut enc_raw).map(|_| enc_raw[0])?;
+        let enc_raw = port.read_exact(&mut enc_raw).map(|_| enc_raw[0])?;
 
         // Parse encoding byte:
         let encoding = match Encoding::try_from(enc_raw) {
@@ -107,7 +107,7 @@ impl FrameHeader {
 
         let mut v: Vec<u8> = vec![0; FrameHeader::encoded_size(encoding) - 1];
 
-        read_exact_unescaped(r, &mut v)?;
+        read_exact_unescaped(port, &mut v)?;
 
         if encoding == Encoding::ZHEX {
             v = match FromHex::from_hex(&v) {
@@ -419,7 +419,16 @@ where
         match frame.frame_type() {
             FrameKind::ZRINIT => match stage {
                 Stage::Waiting => {
-                    write_zfile(port, filename, filesize)?;
+                    let mut buf = vec![];
+
+                    ZFILE_HEADER.write(port)?;
+                    buf.extend_from_slice(filename.as_bytes());
+                    buf.push(b'\0');
+                    if let Some(size) = filesize {
+                        buf.extend_from_slice(size.to_string().as_bytes());
+                    }
+                    buf.push(b'\0');
+                    write_subpacket(port, Encoding::ZBIN32, PacketKind::ZCRCW, &buf)?;
                     stage = Stage::Ready;
                 }
                 Stage::Ready => (),
@@ -478,7 +487,15 @@ where
         match frame.frame_type() {
             FrameKind::ZFILE => match stage {
                 Stage::Waiting | Stage::Ready => {
-                    read_zfile(frame.encoding(), &count, port)?;
+                    assert_eq!(count, 0);
+                    let mut buf = Vec::new();
+                    match read_subpacket(port, frame.encoding(), &mut buf).map(|_| ()) {
+                        Err(ref err) if err.kind() == ErrorKind::InvalidData => {
+                            ZNAK_HEADER.write(port)
+                        }
+                        Err(err) => Err(err),
+                        _ => ZRPOS_HEADER.with_count(0).write(port),
+                    }?;
                     stage = Stage::Ready;
                 }
                 Stage::Receiving => (),
@@ -517,40 +534,6 @@ where
     }
 
     Ok(count as usize)
-}
-
-/// Sends a ZFILE packet
-fn write_zfile<P>(port: &mut P, name: &str, maybe_size: Option<u32>) -> io::Result<()>
-where
-    P: Read + Write,
-{
-    let mut data = vec![];
-
-    ZFILE_HEADER.write(port)?;
-    data.extend_from_slice(name.as_bytes());
-    data.push(b'\0');
-    if let Some(size) = maybe_size {
-        data.extend_from_slice(size.to_string().as_bytes());
-    }
-    data.push(b'\0');
-    write_subpacket(port, Encoding::ZBIN32, PacketKind::ZCRCW, &data)
-}
-
-/// Receives a ZFILE packet
-fn read_zfile<P>(encoding: Encoding, count: &u32, port: &mut P) -> io::Result<()>
-where
-    P: Write + Read,
-{
-    let mut buf = Vec::new();
-
-    match read_subpacket(port, encoding, &mut buf) {
-        Err(ref err) if err.kind() == ErrorKind::InvalidData => ZNAK_HEADER.write(port),
-        Err(err) => Err(err),
-        _ => {
-            // TODO: Process filename and length.
-            ZRPOS_HEADER.with_count(*count).write(port)
-        }
-    }
 }
 
 /// Writes a ZDATA
@@ -627,44 +610,6 @@ where
     }
 }
 
-pub const fn escape(value: u8) -> u8 {
-    match value {
-        0xff => 0x6d,
-        0x7f => 0x6c,
-        0x10 | 0x90 | 0x11 | 0x91 | 0x13 | 0x93 | ZDLE => value ^ 0x40,
-        // Telenet command escaping, which actually necessary only when preceded
-        // by 0x40 or 0xc0, meaning that this could be optimized a bit with the
-        // help of previous byte.
-        0x0d | 0x8d => value ^ 0x40,
-        _ => value,
-    }
-}
-
-pub const fn unescape(value: u8) -> u8 {
-    match value {
-        0x6d => 0xff,
-        0x6c => 0x7f,
-        _ => {
-            // Bit 6 must be set and bit 5 *reset*:
-            if value & 0x60 == 0x40 {
-                value ^ 0x40
-            } else {
-                value
-            }
-        }
-    }
-}
-
-pub fn escape_array(src: &[u8], dst: &mut Vec<u8>) {
-    for value in src {
-        let escaped = escape(*value);
-        if escaped != *value {
-            dst.push(ZDLE);
-        }
-        dst.push(escaped);
-    }
-}
-
 /// Skips (ZPAD, [ZPAD,] ZDLE) sequence.
 fn read_zpad<P>(port: &mut P) -> io::Result<()>
 where
@@ -735,22 +680,6 @@ where
     Ok(result)
 }
 
-fn read_exact_unescaped<R>(mut r: R, buf: &mut [u8]) -> io::Result<()>
-where
-    R: io::Read,
-{
-    for x in buf {
-        let mut buf = [0; 1];
-
-        *x = match r.read_exact(&mut buf).map(|_| buf[0])? {
-            ZDLE => unescape(r.read_exact(&mut buf).map(|_| buf[0])?),
-            y => y,
-        };
-    }
-
-    Ok(())
-}
-
 fn write_subpacket<P>(
     port: &mut P,
     encoding: Encoding,
@@ -790,6 +719,60 @@ where
     port.write_all(&esc_crc)?;
 
     Ok(())
+}
+
+fn read_exact_unescaped<P>(port: &mut P, buf: &mut [u8]) -> io::Result<()>
+where
+    P: io::Read,
+{
+    for x in buf {
+        let mut buf = [0; 1];
+
+        *x = match port.read_exact(&mut buf).map(|_| buf[0])? {
+            ZDLE => unescape(port.read_exact(&mut buf).map(|_| buf[0])?),
+            y => y,
+        };
+    }
+
+    Ok(())
+}
+
+pub const fn escape(value: u8) -> u8 {
+    match value {
+        0xff => 0x6d,
+        0x7f => 0x6c,
+        0x10 | 0x90 | 0x11 | 0x91 | 0x13 | 0x93 | ZDLE => value ^ 0x40,
+        // Telenet command escaping, which actually necessary only when preceded
+        // by 0x40 or 0xc0, meaning that this could be optimized a bit with the
+        // help of previous byte.
+        0x0d | 0x8d => value ^ 0x40,
+        _ => value,
+    }
+}
+
+pub const fn unescape(value: u8) -> u8 {
+    match value {
+        0x6d => 0xff,
+        0x6c => 0x7f,
+        _ => {
+            // Bit 6 must be set and bit 5 *reset*:
+            if value & 0x60 == 0x40 {
+                value ^ 0x40
+            } else {
+                value
+            }
+        }
+    }
+}
+
+pub fn escape_array(src: &[u8], dst: &mut Vec<u8>) {
+    for value in src {
+        let escaped = escape(*value);
+        if escaped != *value {
+            dst.push(ZDLE);
+        }
+        dst.push(escaped);
+    }
 }
 
 #[cfg(test)]
