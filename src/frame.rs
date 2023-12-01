@@ -2,6 +2,7 @@
 //! ZMODEM transfer protocol frame
 
 use crate::{escape_array, CRC16, CRC32, XON, ZDLE, ZPAD};
+use bitflags::bitflags;
 use core::convert::TryFrom;
 use std::fmt::{self, Display};
 use tinyvec::{array_vec, ArrayVec};
@@ -62,11 +63,11 @@ pub struct Header {
 }
 
 impl Header {
-    pub const fn new(encoding: Encoding, frame_type: Type, flags: &[u8; 4]) -> Header {
+    pub const fn new(encoding: Encoding, frame_type: Type) -> Header {
         Header {
             encoding,
             frame_type,
-            flags: *flags,
+            flags: [0; 4],
         }
     }
 
@@ -75,6 +76,14 @@ impl Header {
             encoding: self.encoding,
             frame_type: self.frame_type,
             flags: count.to_le_bytes(),
+        }
+    }
+
+    pub const fn with_flags(&self, flags: &[u8; 4]) -> Self {
+        Header {
+            encoding: self.encoding,
+            frame_type: self.frame_type,
+            flags: *flags,
         }
     }
 
@@ -227,5 +236,28 @@ impl TryFrom<u8> for Type {
 impl Display for Type {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{:#02x}", *self as u8)
+    }
+}
+
+bitflags! {
+    /// Flags used as part of ZRINIT to notify the sender about receivers
+    /// capabilities.
+    pub struct ReceiverFlags: u8 {
+        /// Can send and receive in full-duplex
+        const CANFDX = 0x01;
+        /// Can receive data in parallel with disk I/O
+        const CANOVIO = 0x02;
+        /// Can send a break signal
+        const CANBRK = 0x04;
+        /// Can decrypt
+        const CANCRY = 0x08;
+        /// Can uncompress
+        const CANLZW = 0x10;
+        /// Can use 32-bit frame check
+        const CANFC32 = 0x20;
+        /// Expects control character to be escaped
+        const ESCCTL = 0x40;
+        /// Expects 8th bit to be escaped
+        const ESC8 = 0x80;
     }
 }

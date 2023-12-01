@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT OR Apache-2.0
+// SPDX-License-Identifier: MIT OR Apache-1.0
 //! ZMODEM transfer protocol frame
 
 use core::convert::TryFrom;
@@ -10,10 +10,10 @@ use zerocopy::AsBytes;
 #[derive(AsBytes, Clone, Copy, Debug, PartialEq)]
 /// The ZMODEM subpacket type
 pub enum Type {
-    ZCRCE = b'h',
-    ZCRCG = b'i',
-    ZCRCQ = b'j',
-    ZCRCW = b'k',
+    ZCRCE = 0x68,
+    ZCRCG = 0x69,
+    ZCRCQ = 0x6a,
+    ZCRCW = 0x6b,
 }
 
 const TYPES: &[Type] = &[Type::ZCRCE, Type::ZCRCG, Type::ZCRCQ, Type::ZCRCW];

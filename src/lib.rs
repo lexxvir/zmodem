@@ -14,22 +14,21 @@ use std::str::from_utf8;
 pub const CRC16: Crc<u16> = Crc::<u16>::new(&CRC_16_XMODEM);
 pub const CRC32: Crc<u32> = Crc::<u32>::new(&CRC_32_ISO_HDLC);
 
-pub const ZACK_HEADER: Header = Header::new(Encoding::ZHEX, Type::ZACK, &[0; 4]);
-pub const ZDATA_HEADER: Header = Header::new(Encoding::ZBIN32, Type::ZDATA, &[0; 4]);
-pub const ZEOF_HEADER: Header = Header::new(Encoding::ZBIN32, Type::ZEOF, &[0; 4]);
-pub const ZFILE_HEADER: Header = Header::new(Encoding::ZBIN32, Type::ZFILE, &[0, 0, 0, 0x23]);
-pub const ZFIN_HEADER: Header = Header::new(Encoding::ZHEX, Type::ZFIN, &[0; 4]);
-pub const ZNAK_HEADER: Header = Header::new(Encoding::ZHEX, Type::ZNAK, &[0; 4]);
-pub const ZRINIT_HEADER: Header = Header::new(Encoding::ZHEX, Type::ZRINIT, &[0, 0, 0, 0x23]);
-pub const ZRPOS_HEADER: Header = Header::new(Encoding::ZHEX, Type::ZRPOS, &[0; 4]);
-pub const ZRQINIT_HEADER: Header = Header::new(Encoding::ZHEX, Type::ZRQINIT, &[0, 0, 0, 0x23]);
+pub const ZACK_HEADER: Header = Header::new(Encoding::ZHEX, Type::ZACK);
+pub const ZDATA_HEADER: Header = Header::new(Encoding::ZBIN32, Type::ZDATA);
+pub const ZEOF_HEADER: Header = Header::new(Encoding::ZBIN32, Type::ZEOF);
+pub const ZFILE_HEADER: Header =
+    Header::new(Encoding::ZBIN32, Type::ZFILE).with_flags(&[0, 0, 0, 0x23]);
+pub const ZFIN_HEADER: Header = Header::new(Encoding::ZHEX, Type::ZFIN);
+pub const ZNAK_HEADER: Header = Header::new(Encoding::ZHEX, Type::ZNAK);
+pub const ZRINIT_HEADER: Header =
+    Header::new(Encoding::ZHEX, Type::ZRINIT).with_flags(&[0, 0, 0, 0x23]);
+pub const ZRPOS_HEADER: Header = Header::new(Encoding::ZHEX, Type::ZRPOS);
+pub const ZRQINIT_HEADER: Header =
+    Header::new(Encoding::ZHEX, Type::ZRQINIT).with_flags(&[0, 0, 0, 0x23]);
 
 pub const ZPAD: u8 = b'*';
 pub const ZDLE: u8 = 0x18;
-pub const ZDLEE: u8 = 0x58;
-
-pub const ESC_FF: u8 = b'm';
-pub const ESC_7F: u8 = b'l';
 
 pub const XON: u8 = 0x11;
 
@@ -123,7 +122,7 @@ where
 
         let frame = match parse_header(&mut port)? {
             Some(frame) => frame,
-            None => {
+            _ => {
                 if stage == Stage::Receiving {
                     port.write_all(&Frame::new(&ZRPOS_HEADER.with_count(count)).0)?;
                 } else {
@@ -292,25 +291,28 @@ where
     }
 }
 
-pub fn escape(value: u8) -> Option<[u8; 2]> {
-    Some(match value {
-        0xFF => [ZDLE, ESC_FF],
-        0x7F => [ZDLE, ESC_7F],
-        0x10 | 0x90 | 0x11 | 0x91 | 0x13 | 0x93 => [ZDLE, value ^ 0x40],
-        ZDLE => [ZDLE, ZDLEE],
-        _ => return None,
-    })
+pub const fn escape(value: u8) -> u8 {
+    match value {
+        0xff => 0x6d,
+        0x7f => 0x6c,
+        0x10 | 0x90 | 0x11 | 0x91 | 0x13 | 0x93 | ZDLE => value ^ 0x40,
+        // Telenet command escaping, which actually necessary only when preceded
+        // by 0x40 or 0xc0, meaning that this could be optimized a bit with the
+        // help of previous byte.
+        0x0d | 0x8d => value ^ 0x40,
+        _ => value,
+    }
 }
 
-pub fn unescape(value: u8) -> u8 {
+pub const fn unescape(value: u8) -> u8 {
     match value {
-        ESC_FF => 0xFF,
-        ESC_7F => 0x7F,
-        x => {
-            if x & 0x60 != 0 {
-                x ^ 0x40
+        0x6d => 0xff,
+        0x6c => 0x7f,
+        _ => {
+            if value & 0x60 != 0 {
+                value ^ 0x40
             } else {
-                x
+                value
             }
         }
     }
@@ -318,11 +320,11 @@ pub fn unescape(value: u8) -> u8 {
 
 pub fn escape_array(src: &[u8], dst: &mut Vec<u8>) {
     for value in src {
-        if let Some(value) = escape(*value) {
-            dst.extend_from_slice(&value);
-        } else {
-            dst.push(*value);
+        let escaped = escape(*value);
+        if escaped != *value {
+            dst.push(ZDLE);
         }
+        dst.push(escaped);
     }
 }
 
@@ -391,7 +393,7 @@ where
         Err(_) => return Ok(None),
     };
 
-    let header = Header::new(encoding, ft, &[v[1], v[2], v[3], v[4]]);
+    let header = Header::new(encoding, ft).with_flags(&[v[1], v[2], v[3], v[4]]);
     log::trace!("FRAME {}", header);
     Ok(Some(header))
 }
@@ -410,6 +412,8 @@ where
     let result;
 
     loop {
+        // FIXME: To be aligned with the ZMODEM specification 0x11, 0x91, 0x13
+        // and 0x93 should be ignored here.
         file.read_until(ZDLE, buf)?;
 
         let mut byte = [0; 1];
@@ -471,8 +475,7 @@ where
     digest.update(data);
     digest.update(&[subpacket_type]);
 
-    // Assuming little-endian byte order, given that ZMODEM used to work on
-    // VAX, which was a little-endian computer architecture:
+    // ZBIN32
     let crc = digest.finalize().to_le_bytes();
 
     let mut esc_data = vec![];
@@ -507,7 +510,7 @@ mod tests {
         #[case] frame_type: Type,
         #[case] expected: &[u8],
     ) {
-        let header = Header::new(encoding, frame_type, &[0; 4]);
+        let header = Header::new(encoding, frame_type).with_flags(&[0; 4]);
         let frame = Frame::new(&header);
         assert_eq!(frame.0, expected);
     }
@@ -521,7 +524,7 @@ mod tests {
         #[case] flags: &[u8; 4],
         #[case] expected: &[u8],
     ) {
-        let header = Header::new(encoding, frame_type, flags);
+        let header = Header::new(encoding, frame_type).with_flags(flags);
         let frame = Frame::new(&header);
         assert_eq!(frame.0, expected);
     }
@@ -538,10 +541,10 @@ mod tests {
     }
 
     #[rstest::rstest]
-    #[case(&[Encoding::ZHEX as u8, b'0', b'1', b'0', b'1', b'0', b'2', b'0', b'3', b'0', b'4', b'a', b'7', b'5', b'2'], &Header::new(Encoding::ZHEX, Type::ZRINIT, &[0x1, 0x2, 0x3, 0x4]))]
-    #[case(&[Encoding::ZBIN as u8, Type::ZRINIT as u8, 0xa, 0xb, 0xc, 0xd, 0xa6, 0xcb], &Header::new(Encoding::ZBIN, Type::ZRINIT, &[0xa, 0xb, 0xc, 0xd]))]
-    #[case(&[Encoding::ZBIN32 as u8, Type::ZRINIT as u8, 0xa, 0xb, 0xc, 0xd, 0x99, 0xe2, 0xae, 0x4a], &Header::new(Encoding::ZBIN32, Type::ZRINIT, &[0xa, 0xb, 0xc, 0xd]))]
-    #[case(&[Encoding::ZBIN as u8, Type::ZRINIT as u8, 0xa, ZDLE, b'l', 0xd, ZDLE, b'm', 0x5e, 0x6f], &Header::new(Encoding::ZBIN, Type::ZRINIT, &[0xa, 0x7f, 0xd, 0xff]))]
+    #[case(&[Encoding::ZHEX as u8, b'0', b'1', b'0', b'1', b'0', b'2', b'0', b'3', b'0', b'4', b'a', b'7', b'5', b'2'], &Header::new(Encoding::ZHEX, Type::ZRINIT).with_flags(&[0x1, 0x2, 0x3, 0x4]))]
+    #[case(&[Encoding::ZBIN as u8, Type::ZRINIT as u8, 0xa, 0xb, 0xc, 0xd, 0xa6, 0xcb], &Header::new(Encoding::ZBIN, Type::ZRINIT).with_flags(&[0xa, 0xb, 0xc, 0xd]))]
+    #[case(&[Encoding::ZBIN32 as u8, Type::ZRINIT as u8, 0xa, 0xb, 0xc, 0xd, 0x99, 0xe2, 0xae, 0x4a], &Header::new(Encoding::ZBIN32, Type::ZRINIT).with_flags(&[0xa, 0xb, 0xc, 0xd]))]
+    #[case(&[Encoding::ZBIN as u8, Type::ZRINIT as u8, 0xa, ZDLE, b'l', 0xd, ZDLE, b'm', 0x5e, 0x6f], &Header::new(Encoding::ZBIN, Type::ZRINIT).with_flags(&[0xa, 0x7f, 0xd, 0xff]))]
     pub fn test_parse_header(#[case] input: &[u8], #[case] expected: &Header) {
         assert_eq!(&mut parse_header(&input[..]).unwrap().unwrap(), expected);
     }
