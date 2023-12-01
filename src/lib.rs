@@ -52,7 +52,7 @@ where
     ZRQINIT_HEADER.write(port)?;
     loop {
         port.flush()?;
-        if !skip_zpad(port)? {
+        if !read_zpad(port)? {
             continue;
         }
         let frame = match Header::read(port)? {
@@ -105,7 +105,7 @@ where
     ZRINIT_HEADER.write(port)?;
 
     loop {
-        if !skip_zpad(port)? {
+        if !read_zpad(port)? {
             continue;
         }
 
@@ -329,7 +329,7 @@ pub fn escape_array(src: &[u8], dst: &mut Vec<u8>) {
 }
 
 /// Skips (ZPAD, [ZPAD,] ZDLE) sequence.
-fn skip_zpad<P>(port: &mut P) -> io::Result<bool>
+fn read_zpad<P>(port: &mut P) -> io::Result<bool>
 where
     P: Read,
 {
@@ -459,7 +459,7 @@ where
 mod tests {
     use crate::{
         header::{Encoding, Header, Type},
-        read_subpacket, skip_zpad, subpacket, write_subpacket, XON, ZDLE, ZPAD,
+        read_subpacket, read_zpad, subpacket, write_subpacket, XON, ZDLE, ZPAD,
     };
 
     #[rstest::rstest]
@@ -495,11 +495,15 @@ mod tests {
     #[case(&[ZPAD, ZDLE], Ok(true))]
     #[case(&[ZPAD, ZPAD, ZDLE], Ok(true))]
     #[case(&[ZDLE], Ok(true))]
-    #[case(&[], Err(std::io::ErrorKind::InvalidData.into()))]
+    #[case(&[], Err(std::io::ErrorKind::UnexpectedEof.into()))]
     #[case(&[0; 100], Ok(false))]
-    pub fn test_skip_zpad(#[case] data: &[u8], #[case] expected: std::io::Result<bool>) {
-        let data = data.to_vec();
-        assert_eq!(skip_zpad(&mut data.as_slice()).is_err(), expected.is_err());
+    pub fn test_read_zpad(#[case] port: &[u8], #[case] expected: std::io::Result<bool>) {
+        let result = read_zpad(&mut port.to_vec().as_slice());
+        if result.is_ok() {
+            assert_eq!(result.unwrap(), expected.unwrap());
+        } else {
+            assert_eq!(result.unwrap_err().kind(), expected.unwrap_err().kind());
+        }
     }
 
     #[rstest::rstest]
