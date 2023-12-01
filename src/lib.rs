@@ -68,8 +68,8 @@ impl FrameHeader {
         }
     }
 
-    /// Returns encoded size of the header when it is streamed to the serial link.
-    pub const fn encoded_size(encoding: Encoding) -> usize {
+    /// Returns unescaped size of the header, while being still serialized.
+    pub const fn unescaped_size(encoding: Encoding) -> usize {
         match encoding {
             Encoding::ZBIN => core::mem::size_of::<FrameHeader>() + 2,
             Encoding::ZBIN32 => core::mem::size_of::<FrameHeader>() + 4,
@@ -105,9 +105,11 @@ impl FrameHeader {
             Err(_) => return Err(ErrorKind::InvalidData.into()),
         };
 
-        let mut v: Vec<u8> = vec![0; FrameHeader::encoded_size(encoding) - 1];
+        let mut v: Vec<u8> = vec![];
 
-        read_exact_unescaped(port, &mut v)?;
+        for _ in  0..FrameHeader::unescaped_size(encoding) - 1 {
+            v.push(read_byte_unescaped(port)?);
+        }
 
         if encoding == Encoding::ZHEX {
             v = match FromHex::from_hex(&v) {
@@ -145,7 +147,7 @@ impl FrameHeader {
     where
         P: Write,
     {
-        let mut out = array_vec!([u8; FrameHeader::encoded_size(Encoding::ZHEX) + 6]);
+        let mut out = array_vec!([u8; FrameHeader::unescaped_size(Encoding::ZHEX) + 6]);
 
         out.push(ZPAD);
         if self.encoding == Encoding::ZHEX {
@@ -642,11 +644,9 @@ where
     let result;
 
     loop {
-        let mut byte = [0; 1];
-        let byte = port.read_exact(&mut byte).map(|_| byte[0])?;
+        let byte = read_byte(port)?;
         if byte == ZDLE {
-            let mut byte = [0; 1];
-            let byte = port.read_exact(&mut byte).map(|_| byte[0])?;
+            let byte = read_byte(port)?;
             if let Ok(sp_type) = PacketKind::try_from(byte) {
                 buf.push(sp_type as u8);
                 result = sp_type;
@@ -662,7 +662,9 @@ where
     let crc_len = if encoding == Encoding::ZBIN32 { 4 } else { 2 };
     let mut crc1 = vec![0; crc_len];
 
-    read_exact_unescaped(port, &mut crc1)?;
+    for b in &mut crc1 {
+        *b = read_byte_unescaped(port)?;
+    }
 
     let crc2 = match encoding {
         Encoding::ZBIN32 => CRC32.checksum(buf).to_le_bytes().to_vec(),
@@ -721,20 +723,24 @@ where
     Ok(())
 }
 
-fn read_exact_unescaped<P>(port: &mut P, buf: &mut [u8]) -> io::Result<()>
+fn read_byte_unescaped<P>(port: &mut P) -> io::Result<u8>
 where
     P: io::Read,
 {
-    for x in buf {
-        let mut buf = [0; 1];
+    let b = read_byte(port)?;
+    Ok(if b == ZDLE {
+        unescape(read_byte(port)?)
+    } else {
+        b
+    })
+}
 
-        *x = match port.read_exact(&mut buf).map(|_| buf[0])? {
-            ZDLE => unescape(port.read_exact(&mut buf).map(|_| buf[0])?),
-            y => y,
-        };
-    }
-
-    Ok(())
+fn read_byte<P>(port: &mut P) -> io::Result<u8>
+where
+    P: io::Read,
+{
+    let mut buf = [0; 1];
+    Ok(port.read_exact(&mut buf).map(|_| buf[0])?)
 }
 
 pub const fn escape(value: u8) -> u8 {
