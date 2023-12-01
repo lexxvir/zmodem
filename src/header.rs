@@ -65,7 +65,7 @@ impl Header {
         u32::from_le_bytes(self.flags)
     }
 
-    pub fn read<R>(mut r: R) -> io::Result<Option<Header>>
+    pub fn read<R>(r: &mut R) -> io::Result<Option<Header>>
     where
         R: Read,
     {

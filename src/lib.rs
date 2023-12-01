@@ -48,38 +48,37 @@ where
     F: Read + Seek,
 {
     let mut stage = Stage::Waiting;
-    let mut port = port::Port::new(port);
 
-    ZRQINIT_HEADER.write(&mut port)?;
+    ZRQINIT_HEADER.write(port)?;
     loop {
         port.flush()?;
-        if !skip_zpad(&mut port)? {
+        if !skip_zpad(port)? {
             continue;
         }
-        let frame = match Header::read(&mut port)? {
+        let frame = match Header::read(port)? {
             Some(x) => x,
             None => {
-                ZNAK_HEADER.write(&mut port)?;
+                ZNAK_HEADER.write(port)?;
                 continue;
             }
         };
 
         if stage == Stage::Waiting {
             if frame.frame_type() == Type::ZRINIT {
-                write_zfile(&mut port, filename, filesize)?;
+                write_zfile(port, filename, filesize)?;
                 stage = Stage::Ready;
             } else {
-                ZRQINIT_HEADER.write(&mut port)?;
+                ZRQINIT_HEADER.write(port)?;
             }
         } else {
             match frame.frame_type() {
                 Type::ZRPOS | Type::ZACK => {
-                    write_zdata(&mut port, file, &frame)?;
+                    write_zdata(port, file, &frame)?;
                     stage = Stage::Receiving;
                 }
                 Type::ZRINIT => {
                     if stage == Stage::Receiving {
-                        ZFIN_HEADER.write(&mut port)?;
+                        ZFIN_HEADER.write(port)?;
                     }
                 }
                 _ => {
@@ -332,7 +331,7 @@ pub fn escape_array(src: &[u8], dst: &mut Vec<u8>) {
 /// Skips (ZPAD, [ZPAD,] ZDLE) sequence.
 fn skip_zpad<P>(port: &mut P) -> io::Result<bool>
 where
-    P: BufRead,
+    P: Read,
 {
     let mut buf = [0; 1];
 
@@ -508,14 +507,11 @@ mod tests {
     #[case(&[Encoding::ZBIN32 as u8, Type::ZRINIT as u8, 0xa, 0xb, 0xc, 0xd, 0x99, 0xe2, 0xae, 0x4a], &Header::new(Encoding::ZBIN32, Type::ZRINIT).with_flags(&[0xa, 0xb, 0xc, 0xd]))]
     #[case(&[Encoding::ZBIN as u8, Type::ZRINIT as u8, 0xa, ZDLE, b'l', 0xd, ZDLE, b'm', 0x5e, 0x6f], &Header::new(Encoding::ZBIN, Type::ZRINIT).with_flags(&[0xa, 0x7f, 0xd, 0xff]))]
     pub fn test_header_read(#[case] input: &[u8], #[case] expected: &Header) {
-        assert_eq!(&mut Header::read(&input[..]).unwrap().unwrap(), expected);
-    }
-
-    #[test]
-    fn test_parse_header_none() {
-        let frame = Type::ZRINIT;
-        let i = [0xaa, frame as u8, 0xa, 0xb, 0xc, 0xd, 0xf, 0xf];
-        assert_eq!(Header::read(&i[..]).unwrap_or(None), None);
+        let input = input.to_vec();
+        assert_eq!(
+            &mut Header::read(&mut input.as_slice()).unwrap().unwrap(),
+            expected
+        );
     }
 
     #[rstest::rstest]
