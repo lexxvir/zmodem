@@ -1,13 +1,12 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-mod frame;
+mod header;
 mod port;
 mod subpacket;
 
 use core::convert::TryFrom;
 use crc::{Crc, CRC_16_XMODEM, CRC_32_ISO_HDLC};
-use frame::{Encoding, Frame, Header, Type};
-use hex::FromHex;
+use header::{Encoding, Header, Type};
 use std::io::{self, BufRead, Read, Result, Seek, SeekFrom, Write};
 use std::str::from_utf8;
 
@@ -51,27 +50,26 @@ where
     let mut stage = Stage::Waiting;
     let mut port = port::Port::new(port);
 
-    port.write_all(&Frame::new(&ZRQINIT_HEADER).0)?;
+    ZRQINIT_HEADER.write(&mut port)?;
     loop {
         port.flush()?;
         if !skip_zpad(&mut port)? {
             continue;
         }
-        let frame = match parse_header(&mut port)? {
+        let frame = match Header::read(&mut port)? {
             Some(x) => x,
             None => {
-                port.write_all(&Frame::new(&ZNAK_HEADER).0)?;
+                ZNAK_HEADER.write(&mut port)?;
                 continue;
             }
         };
-
         match stage {
             Stage::Waiting => match frame.frame_type() {
                 Type::ZRINIT => {
                     write_zfile(&mut port, filename, filesize)?;
                     stage = Stage::Ready;
                 }
-                _ => port.write_all(&Frame::new(&ZRQINIT_HEADER).0)?,
+                _ => ZRQINIT_HEADER.write(&mut port)?,
             },
             Stage::Ready => match frame.frame_type() {
                 Type::ZRPOS => {
@@ -91,7 +89,7 @@ where
             Stage::Receiving => match frame.frame_type() {
                 Type::ZRPOS => write_zdata(&mut port, file, &frame)?,
                 Type::ZACK => write_zdata(&mut port, file, &frame)?,
-                Type::ZRINIT => port.write_all(&Frame::new(&ZFIN_HEADER).0)?,
+                Type::ZRINIT => ZFIN_HEADER.write(&mut port)?,
                 _ => {
                     port.write_all("OO".as_bytes())?;
                     break;
@@ -113,20 +111,20 @@ where
     let mut port = port::Port::new(port);
     let mut count = 0;
 
-    port.write_all(&Frame::new(&ZRINIT_HEADER).0)?;
+    ZRINIT_HEADER.write(&mut port)?;
 
     loop {
         if !skip_zpad(&mut port)? {
             continue;
         }
 
-        let frame = match parse_header(&mut port)? {
+        let frame = match Header::read(&mut port)? {
             Some(frame) => frame,
             _ => {
                 if stage == Stage::Receiving {
-                    port.write_all(&Frame::new(&ZRPOS_HEADER.with_count(count)).0)?;
+                    ZRPOS_HEADER.with_count(count).write(&mut port)?;
                 } else {
-                    port.write_all(&Frame::new(&ZNAK_HEADER).0)?;
+                    ZNAK_HEADER.write(&mut port)?;
                 }
                 continue;
             }
@@ -139,7 +137,7 @@ where
                     stage = Stage::Ready;
                 }
                 _ => {
-                    port.write_all(&Frame::new(&ZRINIT_HEADER).0)?;
+                    ZRINIT_HEADER.write(&mut port)?;
                 }
             },
             Stage::Ready => match frame.frame_type() {
@@ -148,7 +146,7 @@ where
                     if frame.count() != count
                         || !read_zdata(frame.encoding() as u8, &mut count, &mut port, file)?
                     {
-                        port.write_all(&Frame::new(&ZRPOS_HEADER.with_count(count)).0)?
+                        ZRPOS_HEADER.with_count(count).write(&mut port)?
                     }
                     stage = Stage::Receiving;
                 }
@@ -159,7 +157,7 @@ where
                     if frame.count() != count
                         || !read_zdata(frame.encoding() as u8, &mut count, &mut port, file)?
                     {
-                        port.write_all(&Frame::new(&ZRPOS_HEADER.with_count(count)).0)?
+                        ZRPOS_HEADER.with_count(count).write(&mut port)?
                     }
                 }
                 Type::ZEOF => {
@@ -170,11 +168,11 @@ where
                             count
                         );
                     } else {
-                        port.write_all(&Frame::new(&ZRINIT_HEADER).0)?;
+                        ZRINIT_HEADER.write(&mut port)?
                     }
                 }
                 Type::ZFIN => {
-                    port.write_all(&Frame::new(&ZFIN_HEADER).0)?;
+                    ZFIN_HEADER.write(&mut port)?;
                     break;
                 }
                 _ => (),
@@ -192,7 +190,7 @@ where
 {
     let mut data = vec![];
 
-    port.write_all(&Frame::new(&ZFILE_HEADER).0)?;
+    ZFILE_HEADER.write(port)?;
     data.extend_from_slice(name.as_bytes());
     data.push(b'\0');
     if let Some(size) = maybe_size {
@@ -215,11 +213,11 @@ where
 
     let mut count = file.read(&mut data)?;
     if count == 0 {
-        port.write_all(&Frame::new(&ZEOF_HEADER.with_count(offset)).0)?;
+        ZEOF_HEADER.with_count(offset).write(port)?;
         return Ok(());
     }
 
-    port.write_all(&Frame::new(&ZDATA_HEADER.with_count(offset)).0)?;
+    ZDATA_HEADER.with_count(offset).write(port)?;
     for _ in 1..SUBPACKET_PER_ACK {
         write_subpacket(
             port,
@@ -251,9 +249,9 @@ where
     let mut buf = Vec::new();
 
     if read_subpacket(port, encoding, &mut buf)?.is_none() {
-        port.write_all(&Frame::new(&ZNAK_HEADER).0)?;
+        ZNAK_HEADER.write(port)?;
     } else {
-        port.write_all(&Frame::new(&ZRPOS_HEADER.with_count(*count)).0)?;
+        ZRPOS_HEADER.with_count(*count).write(port)?;
 
         // TODO: Process supplied data.
         if let Ok(s) = from_utf8(&buf) {
@@ -289,12 +287,12 @@ where
 
         match zcrc {
             subpacket::Type::ZCRCW => {
-                port.write_all(&Frame::new(&ZACK_HEADER.with_count(*count)).0)?;
+                ZACK_HEADER.with_count(*count).write(port)?;
                 return Ok(true);
             }
             subpacket::Type::ZCRCE => return Ok(true),
             subpacket::Type::ZCRCQ => {
-                port.write_all(&Frame::new(&ZACK_HEADER.with_count(*count)).0)?
+                ZACK_HEADER.with_count(*count).write(port)?;
             }
             subpacket::Type::ZCRCG => log::debug!("ZCRCG"),
         }
@@ -357,56 +355,6 @@ where
     }
 
     Ok(value == ZDLE)
-}
-
-fn parse_header<R>(mut r: R) -> io::Result<Option<Header>>
-where
-    R: Read,
-{
-    // Read encoding byte:
-    let mut enc_raw = [0; 1];
-    let enc_raw = r.read_exact(&mut enc_raw).map(|_| enc_raw[0])?;
-
-    // Parse encoding byte:
-    let encoding = match Encoding::try_from(enc_raw) {
-        Ok(encoding) => encoding,
-        Err(_) => return Ok(None),
-    };
-
-    let mut v: Vec<u8> = vec![0; Header::encoded_size(encoding) - 1];
-
-    read_exact_unescaped(r, &mut v)?;
-
-    if encoding == Encoding::ZHEX {
-        v = match FromHex::from_hex(&v) {
-            Ok(x) => x,
-            _ => {
-                log::error!("from_hex error");
-                return Ok(None);
-            }
-        }
-    }
-
-    let crc1 = v[5..].to_vec();
-    let crc2 = match encoding {
-        Encoding::ZBIN32 => CRC32.checksum(&v[..5]).to_le_bytes().to_vec(),
-        _ => CRC16.checksum(&v[..5]).to_be_bytes().to_vec(),
-    };
-
-    if crc1 != crc2 {
-        log::error!("CRC mismatch: {:?} != {:?}", crc1, crc2);
-        return Ok(None);
-    }
-
-    // Read and parse frame tpye:
-    let ft = match Type::try_from(v[0]) {
-        Ok(ft) => ft,
-        Err(_) => return Ok(None),
-    };
-
-    let header = Header::new(encoding, ft).with_flags(&[v[1], v[2], v[3], v[4]]);
-    log::trace!("FRAME {}", header);
-    Ok(Some(header))
 }
 
 /// Reads and unescapes a ZMODEM protocol subpacket
@@ -518,8 +466,8 @@ where
 #[cfg(test)]
 mod tests {
     use crate::{
-        frame::{Encoding, Frame, Header, Type},
-        parse_header, read_subpacket, skip_zpad, subpacket, write_subpacket, XON, ZDLE, ZPAD,
+        header::{Encoding, Header, Type},
+        read_subpacket, skip_zpad, subpacket, write_subpacket, XON, ZDLE, ZPAD,
     };
 
     #[rstest::rstest]
@@ -531,8 +479,9 @@ mod tests {
         #[case] expected: &[u8],
     ) {
         let header = Header::new(encoding, frame_type).with_flags(&[0; 4]);
-        let frame = Frame::new(&header);
-        assert_eq!(frame.0, expected);
+        let mut port = vec![];
+        header.write(&mut port).unwrap();
+        assert_eq!(port, expected);
     }
 
     #[rstest::rstest]
@@ -545,8 +494,9 @@ mod tests {
         #[case] expected: &[u8],
     ) {
         let header = Header::new(encoding, frame_type).with_flags(flags);
-        let frame = Frame::new(&header);
-        assert_eq!(frame.0, expected);
+        let mut port = vec![];
+        header.write(&mut port).unwrap();
+        assert_eq!(port, expected);
     }
 
     #[rstest::rstest]
@@ -565,15 +515,15 @@ mod tests {
     #[case(&[Encoding::ZBIN as u8, Type::ZRINIT as u8, 0xa, 0xb, 0xc, 0xd, 0xa6, 0xcb], &Header::new(Encoding::ZBIN, Type::ZRINIT).with_flags(&[0xa, 0xb, 0xc, 0xd]))]
     #[case(&[Encoding::ZBIN32 as u8, Type::ZRINIT as u8, 0xa, 0xb, 0xc, 0xd, 0x99, 0xe2, 0xae, 0x4a], &Header::new(Encoding::ZBIN32, Type::ZRINIT).with_flags(&[0xa, 0xb, 0xc, 0xd]))]
     #[case(&[Encoding::ZBIN as u8, Type::ZRINIT as u8, 0xa, ZDLE, b'l', 0xd, ZDLE, b'm', 0x5e, 0x6f], &Header::new(Encoding::ZBIN, Type::ZRINIT).with_flags(&[0xa, 0x7f, 0xd, 0xff]))]
-    pub fn test_parse_header(#[case] input: &[u8], #[case] expected: &Header) {
-        assert_eq!(&mut parse_header(&input[..]).unwrap().unwrap(), expected);
+    pub fn test_header_read(#[case] input: &[u8], #[case] expected: &Header) {
+        assert_eq!(&mut Header::read(&input[..]).unwrap().unwrap(), expected);
     }
 
     #[test]
     fn test_parse_header_none() {
         let frame = Type::ZRINIT;
         let i = [0xaa, frame as u8, 0xa, 0xb, 0xc, 0xd, 0xf, 0xf];
-        assert_eq!(parse_header(&i[..]).unwrap_or(None), None);
+        assert_eq!(Header::read(&i[..]).unwrap_or(None), None);
     }
 
     #[rstest::rstest]
