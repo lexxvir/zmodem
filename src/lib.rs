@@ -7,7 +7,7 @@ mod subpacket;
 use core::convert::TryFrom;
 use crc::{Crc, CRC_16_XMODEM, CRC_32_ISO_HDLC};
 use header::{Encoding, Header, Type};
-use std::io::{self, BufRead, Read, Result, Seek, SeekFrom, Write};
+use std::io::{self, Read, Result, Seek, SeekFrom, Write};
 use std::str::from_utf8;
 
 pub const CRC16: Crc<u16> = Crc::<u16>::new(&CRC_16_XMODEM);
@@ -98,24 +98,24 @@ where
     P: Read + Write,
     F: Write,
 {
+    let port = &mut port::Port::new(port);
     let mut stage = Stage::Waiting;
-    let mut port = port::Port::new(port);
     let mut count = 0;
 
-    ZRINIT_HEADER.write(&mut port)?;
+    ZRINIT_HEADER.write(port)?;
 
     loop {
-        if !skip_zpad(&mut port)? {
+        if !skip_zpad(port)? {
             continue;
         }
 
-        let frame = match Header::read(&mut port)? {
+        let frame = match Header::read(port)? {
             Some(frame) => frame,
             _ => {
                 if stage == Stage::Receiving {
-                    ZRPOS_HEADER.with_count(count).write(&mut port)?;
+                    ZRPOS_HEADER.with_count(count).write(port)?;
                 } else {
-                    ZNAK_HEADER.write(&mut port)?;
+                    ZNAK_HEADER.write(port)?;
                 }
                 continue;
             }
@@ -124,20 +124,20 @@ where
         match stage {
             Stage::Waiting => match frame.frame_type() {
                 Type::ZFILE => {
-                    read_zfile(frame.encoding(), &count, &mut port)?;
+                    read_zfile(frame.encoding(), &count, port)?;
                     stage = Stage::Ready;
                 }
                 _ => {
-                    ZRINIT_HEADER.write(&mut port)?;
+                    ZRINIT_HEADER.write(port)?;
                 }
             },
             Stage::Ready => match frame.frame_type() {
-                Type::ZFILE => read_zfile(frame.encoding(), &count, &mut port)?,
+                Type::ZFILE => read_zfile(frame.encoding(), &count, port)?,
                 Type::ZDATA => {
                     if frame.count() != count
-                        || !read_zdata(frame.encoding() as u8, &mut count, &mut port, file)?
+                        || !read_zdata(frame.encoding() as u8, &mut count, port, file)?
                     {
-                        ZRPOS_HEADER.with_count(count).write(&mut port)?
+                        ZRPOS_HEADER.with_count(count).write(port)?
                     }
                     stage = Stage::Receiving;
                 }
@@ -146,9 +146,9 @@ where
             Stage::Receiving => match frame.frame_type() {
                 Type::ZDATA => {
                     if frame.count() != count
-                        || !read_zdata(frame.encoding() as u8, &mut count, &mut port, file)?
+                        || !read_zdata(frame.encoding() as u8, &mut count, port, file)?
                     {
-                        ZRPOS_HEADER.with_count(count).write(&mut port)?
+                        ZRPOS_HEADER.with_count(count).write(port)?
                     }
                 }
                 Type::ZEOF => {
@@ -159,11 +159,11 @@ where
                             count
                         );
                     } else {
-                        ZRINIT_HEADER.write(&mut port)?
+                        ZRINIT_HEADER.write(port)?
                     }
                 }
                 Type::ZFIN => {
-                    ZFIN_HEADER.write(&mut port)?;
+                    ZFIN_HEADER.write(port)?;
                     break;
                 }
                 _ => (),
@@ -235,7 +235,7 @@ where
 
 fn read_zfile<P>(encoding: Encoding, count: &u32, port: &mut P) -> Result<()>
 where
-    P: Write + BufRead,
+    P: Write + Read,
 {
     let mut buf = Vec::new();
 
@@ -255,7 +255,7 @@ where
 
 fn read_zdata<P, F>(encoding: u8, count: &mut u32, port: &mut P, file: &mut F) -> Result<bool>
 where
-    P: Write + BufRead,
+    P: Write + Read,
     F: Write,
 {
     let mut buf = Vec::new();
@@ -355,24 +355,25 @@ fn read_subpacket<P>(
     buf: &mut Vec<u8>,
 ) -> io::Result<Option<subpacket::Type>>
 where
-    P: BufRead,
+    P: Read,
 {
     let result;
 
     loop {
-        // FIXME: To be aligned with the ZMODEM specification 0x11, 0x91, 0x13
-        // and 0x93 should be ignored here.
-        port.read_until(ZDLE, buf)?;
-
         let mut byte = [0; 1];
         let byte = port.read_exact(&mut byte).map(|_| byte[0])?;
-
-        if let Ok(sp_type) = subpacket::Type::try_from(byte) {
-            *buf.last_mut().unwrap() = sp_type as u8;
-            result = Some(sp_type);
-            break;
+        if byte == ZDLE {
+            let mut byte = [0; 1];
+            let byte = port.read_exact(&mut byte).map(|_| byte[0])?;
+            if let Ok(sp_type) = subpacket::Type::try_from(byte) {
+                buf.push(sp_type as u8);
+                result = Some(sp_type);
+                break;
+            } else {
+                buf.push(unescape(byte));
+            }
         } else {
-            *buf.last_mut().unwrap() = unescape(byte);
+            buf.push(byte);
         }
     }
 
