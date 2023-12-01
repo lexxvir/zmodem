@@ -42,7 +42,7 @@ enum Stage {
 }
 
 /// Sends a file using the ZMODEM file transfer protocol.
-pub fn send<P, F>(port: &mut P, file: &mut F, filename: &str, filesize: Option<u32>) -> Result<()>
+pub fn write<P, F>(port: &mut P, file: &mut F, filename: &str, filesize: Option<u32>) -> Result<()>
 where
     P: Read + Write,
     F: Read + Seek,
@@ -94,7 +94,7 @@ where
 }
 
 /// Receives a file using the ZMODEM file transfer protocol.
-pub fn recv<P, F>(port: &mut P, file: &mut F) -> Result<usize>
+pub fn read<P, F>(port: &mut P, file: &mut F) -> Result<usize>
 where
     P: Read + Write,
     F: Write,

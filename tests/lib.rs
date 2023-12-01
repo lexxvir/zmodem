@@ -65,7 +65,7 @@ fn recv_from_sz() {
     let mut inout = InOut::new(child_stdout, child_stdin);
 
     let mut c = Cursor::new(Vec::new());
-    zmodem::recv(&mut inout, &mut c).unwrap();
+    zmodem::read(&mut inout, &mut c).unwrap();
 
     sleep(Duration::from_millis(300));
     remove_file("recv_from_sz").unwrap();
@@ -94,7 +94,7 @@ fn send_to_rz() {
 
     sleep(Duration::from_millis(300));
 
-    zmodem::send(&mut inout, &mut cur, "send_to_rz", Some(len)).unwrap();
+    zmodem::write(&mut inout, &mut cur, "send_to_rz", Some(len)).unwrap();
 
     sleep(Duration::from_millis(300));
 
@@ -134,7 +134,7 @@ fn lib_send_recv() {
         let origin = RND_VALUES.clone();
         let mut c = Cursor::new(&origin);
 
-        zmodem::send(&mut inout, &mut c, "test", None).unwrap();
+        zmodem::write(&mut inout, &mut c, "test", None).unwrap();
     });
 
     let mut c = Cursor::new(Vec::new());
@@ -143,7 +143,7 @@ fn lib_send_recv() {
     let outf = OpenOptions::new().write(true).open("test-fifo2").unwrap();
     let mut inout = InOut::new(inf, outf);
 
-    zmodem::recv(&mut inout, &mut c).unwrap();
+    zmodem::read(&mut inout, &mut c).unwrap();
 
     let _ = remove_file("test-fifo1");
     let _ = remove_file("test-fifo2");
