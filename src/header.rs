@@ -6,7 +6,7 @@ use bitflags::bitflags;
 use core::convert::TryFrom;
 use hex::FromHex;
 use std::fmt::{self, Display};
-use std::io::{self, Read, Write};
+use std::io::{self, ErrorKind, Read, Write};
 use tinyvec::array_vec;
 
 #[repr(C)]
@@ -65,7 +65,7 @@ impl Header {
         u32::from_le_bytes(self.flags)
     }
 
-    pub fn read<R>(r: &mut R) -> io::Result<Option<Header>>
+    pub fn read<R>(r: &mut R) -> io::Result<Header>
     where
         R: Read,
     {
@@ -76,7 +76,7 @@ impl Header {
         // Parse encoding byte:
         let encoding = match Encoding::try_from(enc_raw) {
             Ok(encoding) => encoding,
-            Err(_) => return Ok(None),
+            Err(_) => return Err(ErrorKind::InvalidData.into()),
         };
 
         let mut v: Vec<u8> = vec![0; Header::encoded_size(encoding) - 1];
@@ -88,7 +88,7 @@ impl Header {
                 Ok(x) => x,
                 _ => {
                     log::error!("from_hex error");
-                    return Ok(None);
+                    return Err(ErrorKind::InvalidData.into());
                 }
             }
         }
@@ -101,18 +101,18 @@ impl Header {
 
         if crc1 != crc2 {
             log::error!("CRC mismatch: {:?} != {:?}", crc1, crc2);
-            return Ok(None);
+            return Err(ErrorKind::InvalidData.into());
         }
 
         // Read and parse frame tpye:
         let ft = match Type::try_from(v[0]) {
             Ok(ft) => ft,
-            Err(_) => return Ok(None),
+            Err(_) => return Err(ErrorKind::InvalidData.into()),
         };
 
         let header = Header::new(encoding, ft).with_flags(&[v[1], v[2], v[3], v[4]]);
         log::trace!("FRAME {}", header);
-        Ok(Some(header))
+        Ok(header)
     }
 
     pub fn write<P>(&self, port: &mut P) -> io::Result<()>

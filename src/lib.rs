@@ -7,8 +7,7 @@ mod subpacket;
 use core::convert::TryFrom;
 use crc::{Crc, CRC_16_XMODEM, CRC_32_ISO_HDLC};
 use header::{Encoding, Header, Type};
-use std::io::{self, Read, Result, Seek, SeekFrom, Write};
-use std::str::from_utf8;
+use std::io::{self, ErrorKind, Read, Result, Seek, SeekFrom, Write};
 
 pub const CRC16: Crc<u16> = Crc::<u16>::new(&CRC_16_XMODEM);
 pub const CRC32: Crc<u32> = Crc::<u32>::new(&CRC_32_ISO_HDLC);
@@ -52,36 +51,43 @@ where
     ZRQINIT_HEADER.write(port)?;
     loop {
         port.flush()?;
-        if !read_zpad(port)? {
-            continue;
+
+        match read_zpad(port) {
+            Err(ref err) if err.kind() == ErrorKind::InvalidData => continue,
+            Err(err) => return Err(err),
+            _ => (),
         }
-        let frame = match Header::read(port)? {
-            Some(x) => x,
-            None => {
+
+        let frame = match Header::read(port) {
+            Err(ref err) if err.kind() == ErrorKind::InvalidData => {
                 ZNAK_HEADER.write(port)?;
                 continue;
             }
+            Err(err) => return Err(err),
+            Ok(frame) => frame,
         };
 
-        if stage == Stage::Waiting {
-            if frame.frame_type() == Type::ZRINIT {
-                write_zfile(port, filename, filesize)?;
-                stage = Stage::Ready;
-            } else {
-                ZRQINIT_HEADER.write(port)?;
-            }
-        } else {
-            match frame.frame_type() {
-                Type::ZRPOS | Type::ZACK => {
+        match frame.frame_type() {
+            Type::ZRINIT => match stage {
+                Stage::Waiting => {
+                    write_zfile(port, filename, filesize)?;
+                    stage = Stage::Ready;
+                }
+                Stage::Ready => (),
+                Stage::Receiving => ZFIN_HEADER.write(port)?,
+            },
+            Type::ZRPOS | Type::ZACK => {
+                if stage == Stage::Waiting {
+                    ZRQINIT_HEADER.write(port)?;
+                } else {
                     write_zdata(port, file, &frame)?;
                     stage = Stage::Receiving;
                 }
-                Type::ZRINIT => {
-                    if stage == Stage::Receiving {
-                        ZFIN_HEADER.write(port)?;
-                    }
-                }
-                _ => {
+            }
+            _ => {
+                if stage == Stage::Waiting {
+                    ZRQINIT_HEADER.write(port)?;
+                } else {
                     port.write_all("OO".as_bytes())?;
                     break;
                 }
@@ -105,76 +111,66 @@ where
     ZRINIT_HEADER.write(port)?;
 
     loop {
-        if !read_zpad(port)? {
-            continue;
+        match read_zpad(port) {
+            Err(ref err) if err.kind() == ErrorKind::InvalidData => continue,
+            Err(err) => return Err(err),
+            _ => (),
         }
 
-        let frame = match Header::read(port)? {
-            Some(frame) => frame,
-            _ => {
-                if stage == Stage::Receiving {
-                    ZRPOS_HEADER.with_count(count).write(port)?;
-                } else {
-                    ZNAK_HEADER.write(port)?;
-                }
+        let frame = match Header::read(port) {
+            Err(ref err) if err.kind() == ErrorKind::InvalidData => {
+                ZNAK_HEADER.write(port)?;
                 continue;
             }
+            Err(err) => return Err(err),
+            Ok(frame) => frame,
         };
 
-        match stage {
-            Stage::Waiting => match frame.frame_type() {
-                Type::ZFILE => {
+        match frame.frame_type() {
+            Type::ZFILE => match stage {
+                Stage::Waiting | Stage::Ready => {
                     read_zfile(frame.encoding(), &count, port)?;
                     stage = Stage::Ready;
                 }
-                _ => {
-                    ZRINIT_HEADER.write(port)?;
-                }
+                Stage::Receiving => (),
             },
-            Stage::Ready => match frame.frame_type() {
-                Type::ZFILE => read_zfile(frame.encoding(), &count, port)?,
-                Type::ZDATA => {
-                    if frame.count() != count
-                        || !read_zdata(frame.encoding() as u8, &mut count, port, file)?
-                    {
+            Type::ZDATA => match stage {
+                Stage::Ready | Stage::Receiving => {
+                    if frame.count() != count {
                         ZRPOS_HEADER.with_count(count).write(port)?
+                    } else {
+                        read_zdata(frame.encoding() as u8, &mut count, port, file)?;
                     }
                     stage = Stage::Receiving;
                 }
-                _ => (),
+                Stage::Waiting => ZRINIT_HEADER.write(port)?,
             },
-            Stage::Receiving => match frame.frame_type() {
-                Type::ZDATA => {
-                    if frame.count() != count
-                        || !read_zdata(frame.encoding() as u8, &mut count, port, file)?
-                    {
-                        ZRPOS_HEADER.with_count(count).write(port)?
-                    }
+            Type::ZEOF if stage == Stage::Receiving => {
+                if frame.count() != count {
+                    log::error!(
+                        "ZEOF offset mismatch: frame({}) != recv({})",
+                        frame.count(),
+                        count
+                    );
+                } else {
+                    ZRINIT_HEADER.write(port)?
                 }
-                Type::ZEOF => {
-                    if frame.count() != count {
-                        log::error!(
-                            "ZEOF offset mismatch: frame({}) != recv({})",
-                            frame.count(),
-                            count
-                        );
-                    } else {
-                        ZRINIT_HEADER.write(port)?
-                    }
-                }
-                Type::ZFIN => {
-                    ZFIN_HEADER.write(port)?;
-                    break;
-                }
-                _ => (),
-            },
+            }
+            Type::ZFIN if stage == Stage::Receiving => {
+                ZFIN_HEADER.write(port)?;
+                break;
+            }
+            _ if stage == Stage::Waiting => {
+                ZRINIT_HEADER.write(port)?;
+            }
+            _ => (),
         }
     }
 
     Ok(count as usize)
 }
 
-/// Sends a ZFILE packet containing file's name and size.
+/// Sends a ZFILE packet
 fn write_zfile<P>(port: &mut P, name: &str, maybe_size: Option<u32>) -> Result<()>
 where
     P: Read + Write,
@@ -191,7 +187,24 @@ where
     write_subpacket(port, Encoding::ZBIN32, subpacket::Type::ZCRCW, &data)
 }
 
-/// Write a ZDATA packet from the given file offset in the ZBIN32 format.
+/// Receives a ZFILE packet
+fn read_zfile<P>(encoding: Encoding, count: &u32, port: &mut P) -> Result<()>
+where
+    P: Write + Read,
+{
+    let mut buf = Vec::new();
+
+    match read_subpacket(port, encoding, &mut buf) {
+        Err(ref err) if err.kind() == ErrorKind::InvalidData => ZNAK_HEADER.write(port),
+        Err(err) => Err(err),
+        _ => {
+            // TODO: Process filename and length.
+            ZRPOS_HEADER.with_count(*count).write(port)
+        }
+    }
+}
+
+/// Writes a ZDATA
 fn write_zdata<P, F>(port: &mut P, file: &mut F, header: &Header) -> Result<()>
 where
     P: Read + Write,
@@ -233,27 +246,8 @@ where
     Ok(())
 }
 
-fn read_zfile<P>(encoding: Encoding, count: &u32, port: &mut P) -> Result<()>
-where
-    P: Write + Read,
-{
-    let mut buf = Vec::new();
-
-    if read_subpacket(port, encoding, &mut buf)?.is_none() {
-        ZNAK_HEADER.write(port)?;
-    } else {
-        ZRPOS_HEADER.with_count(*count).write(port)?;
-
-        // TODO: Process supplied data.
-        if let Ok(s) = from_utf8(&buf) {
-            log::debug!(target: "proto", "ZFILE supplied data: {}", s);
-        }
-    }
-
-    Ok(())
-}
-
-fn read_zdata<P, F>(encoding: u8, count: &mut u32, port: &mut P, file: &mut F) -> Result<bool>
+/// Reads a ZDATA packet
+fn read_zdata<P, F>(encoding: u8, count: &mut u32, port: &mut P, file: &mut F) -> Result<()>
 where
     P: Write + Read,
     F: Write,
@@ -265,12 +259,16 @@ where
 
         let encoding = match encoding.try_into() {
             Ok(encoding) => encoding,
-            Err(_) => return Ok(false),
+            Err(_) => return Err(ErrorKind::InvalidData.into()),
         };
 
-        let zcrc = match read_subpacket(port, encoding, &mut buf)? {
-            Some(x) => x,
-            None => return Ok(false),
+        let zcrc = match read_subpacket(port, encoding, &mut buf) {
+            Err(ref err) if err.kind() == ErrorKind::InvalidData => {
+                ZRPOS_HEADER.with_count(*count).write(port)?;
+                return Err(ErrorKind::InvalidData.into());
+            }
+            Err(err) => return Err(err),
+            Ok(zcrc) => zcrc,
         };
 
         file.write_all(&buf)?;
@@ -279,9 +277,9 @@ where
         match zcrc {
             subpacket::Type::ZCRCW => {
                 ZACK_HEADER.with_count(*count).write(port)?;
-                return Ok(true);
+                return Ok(());
             }
-            subpacket::Type::ZCRCE => return Ok(true),
+            subpacket::Type::ZCRCE => return Ok(()),
             subpacket::Type::ZCRCQ => {
                 ZACK_HEADER.with_count(*count).write(port)?;
             }
@@ -329,7 +327,7 @@ pub fn escape_array(src: &[u8], dst: &mut Vec<u8>) {
 }
 
 /// Skips (ZPAD, [ZPAD,] ZDLE) sequence.
-fn read_zpad<P>(port: &mut P) -> io::Result<bool>
+fn read_zpad<P>(port: &mut P) -> Result<()>
 where
     P: Read,
 {
@@ -337,7 +335,7 @@ where
 
     let mut value = port.read_exact(&mut buf).map(|_| buf[0])?;
     if value != ZPAD {
-        return Ok(false);
+        return Err(ErrorKind::InvalidData.into());
     }
 
     value = port.read_exact(&mut buf).map(|_| buf[0])?;
@@ -345,7 +343,11 @@ where
         value = port.read_exact(&mut buf).map(|_| buf[0])?;
     }
 
-    Ok(value == ZDLE)
+    if value == ZDLE {
+        Ok(())
+    } else {
+        Err(ErrorKind::InvalidData.into())
+    }
 }
 
 /// Reads and unescapes a ZMODEM protocol subpacket
@@ -353,7 +355,7 @@ fn read_subpacket<P>(
     port: &mut P,
     encoding: Encoding,
     buf: &mut Vec<u8>,
-) -> io::Result<Option<subpacket::Type>>
+) -> io::Result<subpacket::Type>
 where
     P: Read,
 {
@@ -367,7 +369,7 @@ where
             let byte = port.read_exact(&mut byte).map(|_| byte[0])?;
             if let Ok(sp_type) = subpacket::Type::try_from(byte) {
                 buf.push(sp_type as u8);
-                result = Some(sp_type);
+                result = sp_type;
                 break;
             } else {
                 buf.push(unescape(byte));
@@ -389,7 +391,7 @@ where
 
     if crc1 != crc2 {
         log::debug!("CRC mismatch: {:?} != {:?}", crc1, crc2);
-        return Ok(None);
+        return Err(ErrorKind::InvalidData.into());
     }
 
     // Pop ZCRC
@@ -398,7 +400,7 @@ where
     Ok(result)
 }
 
-fn read_exact_unescaped<R>(mut r: R, buf: &mut [u8]) -> io::Result<()>
+fn read_exact_unescaped<R>(mut r: R, buf: &mut [u8]) -> Result<()>
 where
     R: io::Read,
 {
@@ -492,16 +494,14 @@ mod tests {
     }
 
     #[rstest::rstest]
-    #[case(&[ZPAD, ZDLE], Ok(true))]
-    #[case(&[ZPAD, ZPAD, ZDLE], Ok(true))]
-    #[case(&[ZDLE], Ok(true))]
+    #[case(&[ZPAD, ZDLE], Ok(()))]
+    #[case(&[ZPAD, ZPAD, ZDLE], Ok(()))]
+    #[case(&[ZDLE], Err(std::io::ErrorKind::InvalidData.into()))]
     #[case(&[], Err(std::io::ErrorKind::UnexpectedEof.into()))]
-    #[case(&[0; 100], Ok(false))]
-    pub fn test_read_zpad(#[case] port: &[u8], #[case] expected: std::io::Result<bool>) {
+    #[case(&[0; 100], Err(std::io::ErrorKind::InvalidData.into()))]
+    pub fn test_read_zpad(#[case] port: &[u8], #[case] expected: std::io::Result<()>) {
         let result = read_zpad(&mut port.to_vec().as_slice());
-        if result.is_ok() {
-            assert_eq!(result.unwrap(), expected.unwrap());
-        } else {
+        if result.is_err() {
             assert_eq!(result.unwrap_err().kind(), expected.unwrap_err().kind());
         }
     }
@@ -513,10 +513,7 @@ mod tests {
     #[case(&[Encoding::ZBIN as u8, Type::ZRINIT as u8, 0xa, ZDLE, b'l', 0xd, ZDLE, b'm', 0x5e, 0x6f], &Header::new(Encoding::ZBIN, Type::ZRINIT).with_flags(&[0xa, 0x7f, 0xd, 0xff]))]
     pub fn test_header_read(#[case] input: &[u8], #[case] expected: &Header) {
         let input = input.to_vec();
-        assert_eq!(
-            &mut Header::read(&mut input.as_slice()).unwrap().unwrap(),
-            expected
-        );
+        assert_eq!(&mut Header::read(&mut input.as_slice()).unwrap(), expected);
     }
 
     #[rstest::rstest]
@@ -534,7 +531,7 @@ mod tests {
         write_subpacket(&mut port, encoding, subpacket_type, data).unwrap();
         assert_eq!(
             read_subpacket(&mut port.as_slice(), encoding, &mut output).unwrap(),
-            Some(subpacket_type)
+            subpacket_type
         );
 
         assert_eq!(&output[..], data);
