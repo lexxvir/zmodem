@@ -14,7 +14,6 @@ hex = "0.4.3"
 log = "0.4.20"
 rstest = "0.18.2"
 tinyvec = "1.6.0"
-zerocopy = { version = "0.7.26", features = ["derive"] }
 
 [dev-dependencies]
 lazy_static = "1"

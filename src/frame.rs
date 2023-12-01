@@ -6,7 +6,6 @@ use bitflags::bitflags;
 use core::convert::TryFrom;
 use std::fmt::{self, Display};
 use tinyvec::{array_vec, ArrayVec};
-use zerocopy::AsBytes;
 
 pub struct Frame(pub ArrayVec<[u8; Header::encoded_size(Encoding::ZHEX) + 6]>);
 
@@ -20,7 +19,9 @@ impl Frame {
         }
 
         out.push(ZDLE);
-        out.extend_from_slice(header.as_bytes());
+        out.push(header.encoding as u8);
+        out.push(header.frame_type as u8);
+        out.extend_from_slice(&header.flags);
 
         // Skips ZPAD and encoding:
         match header.encoding {
@@ -39,7 +40,7 @@ impl Frame {
         let mut escaped = vec![];
         escape_array(&out[3..], &mut escaped);
         out.truncate(3);
-        out.extend_from_slice(escaped.as_bytes());
+        out.extend_from_slice(&escaped);
 
         if header.encoding == Encoding::ZHEX {
             // Add trailing CRLF for ZHEX transfer:
@@ -55,7 +56,7 @@ impl Frame {
 }
 
 #[repr(C)]
-#[derive(AsBytes, Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Header {
     encoding: Encoding,
     frame_type: Type,
@@ -119,7 +120,7 @@ impl fmt::Display for Header {
 
 #[repr(u8)]
 #[allow(clippy::upper_case_acronyms)]
-#[derive(AsBytes, Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 /// The ZMODEM frame type
 pub enum Encoding {
     ZBIN = 0x41,
@@ -151,7 +152,7 @@ impl Display for Encoding {
 
 #[repr(u8)]
 #[allow(clippy::upper_case_acronyms)]
-#[derive(AsBytes, Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 /// The ZMODEM frame type
 pub enum Type {
     /// Request receive init

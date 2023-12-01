@@ -3,11 +3,10 @@
 
 use core::convert::TryFrom;
 use std::fmt::{self, Display};
-use zerocopy::AsBytes;
 
 #[repr(u8)]
 #[allow(clippy::upper_case_acronyms)]
-#[derive(AsBytes, Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 /// The ZMODEM subpacket type
 pub enum Type {
     ZCRCE = 0x68,
