@@ -63,38 +63,30 @@ where
                 continue;
             }
         };
-        match stage {
-            Stage::Waiting => match frame.frame_type() {
+
+        if stage == Stage::Waiting {
+            if frame.frame_type() == Type::ZRINIT {
+                write_zfile(&mut port, filename, filesize)?;
+                stage = Stage::Ready;
+            } else {
+                ZRQINIT_HEADER.write(&mut port)?;
+            }
+        } else {
+            match frame.frame_type() {
+                Type::ZRPOS | Type::ZACK => {
+                    write_zdata(&mut port, file, &frame)?;
+                    stage = Stage::Receiving;
+                }
                 Type::ZRINIT => {
-                    write_zfile(&mut port, filename, filesize)?;
-                    stage = Stage::Ready;
+                    if stage == Stage::Receiving {
+                        ZFIN_HEADER.write(&mut port)?;
+                    }
                 }
-                _ => ZRQINIT_HEADER.write(&mut port)?,
-            },
-            Stage::Ready => match frame.frame_type() {
-                Type::ZRPOS => {
-                    write_zdata(&mut port, file, &frame)?;
-                    stage = Stage::Receiving;
-                }
-                Type::ZACK => {
-                    write_zdata(&mut port, file, &frame)?;
-                    stage = Stage::Receiving;
-                }
-                Type::ZRINIT => (),
                 _ => {
                     port.write_all("OO".as_bytes())?;
                     break;
                 }
-            },
-            Stage::Receiving => match frame.frame_type() {
-                Type::ZRPOS => write_zdata(&mut port, file, &frame)?,
-                Type::ZACK => write_zdata(&mut port, file, &frame)?,
-                Type::ZRINIT => ZFIN_HEADER.write(&mut port)?,
-                _ => {
-                    port.write_all("OO".as_bytes())?;
-                    break;
-                }
-            },
+            }
         }
     }
 
