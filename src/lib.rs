@@ -6,10 +6,9 @@ mod port;
 use bitflags::bitflags;
 use core::convert::TryFrom;
 use crc::{Crc, CRC_16_XMODEM, CRC_32_ISO_HDLC};
-use hex::FromHex;
 use std::fmt::{self, Display};
 use std::io::{self, ErrorKind, Read, Seek, SeekFrom, Write};
-use tinyvec::array_vec;
+use tinyvec::{array_vec, ArrayVec};
 
 pub const CRC16: Crc<u16> = Crc::<u16>::new(&CRC_16_XMODEM);
 pub const CRC32: Crc<u32> = Crc::<u32>::new(&CRC_32_ISO_HDLC);
@@ -105,41 +104,45 @@ impl FrameHeader {
             Err(_) => return Err(ErrorKind::InvalidData.into()),
         };
 
-        let mut v: Vec<u8> = vec![];
+        let mut out = ArrayVec::<[u8; FrameHeader::unescaped_size(Encoding::ZHEX) - 1]>::new();
 
-        for _ in  0..FrameHeader::unescaped_size(encoding) - 1 {
-            v.push(read_byte_unescaped(port)?);
+        for _ in 0..FrameHeader::unescaped_size(encoding) - 1 {
+            out.push(read_byte_unescaped(port)?);
         }
 
         if encoding == Encoding::ZHEX {
-            v = match FromHex::from_hex(&v) {
+            let mut tmp = [0; (FrameHeader::unescaped_size(Encoding::ZHEX) - 1) / 2];
+            match hex::decode_to_slice(out, &mut tmp) {
                 Ok(x) => x,
                 _ => {
                     log::error!("from_hex error");
                     return Err(ErrorKind::InvalidData.into());
                 }
             }
+            out.clear();
+            out.extend_from_slice(&tmp);
         }
 
-        let crc1 = v[5..].to_vec();
-        let crc2 = match encoding {
-            Encoding::ZBIN32 => CRC32.checksum(&v[..5]).to_le_bytes().to_vec(),
-            _ => CRC16.checksum(&v[..5]).to_be_bytes().to_vec(),
+        let crc1 = &out[5..];
+        let mut crc2 = ArrayVec::<[u8; 4]>::new();
+
+        match encoding {
+            Encoding::ZBIN32 => crc2.extend_from_slice(&CRC32.checksum(&out[..5]).to_le_bytes()),
+            _ => crc2.extend_from_slice(&CRC16.checksum(&out[..5]).to_be_bytes()),
         };
 
-        if crc1 != crc2 {
+        if *crc1 != *crc2 {
             log::error!("CRC mismatch: {:?} != {:?}", crc1, crc2);
             return Err(ErrorKind::InvalidData.into());
         }
 
         // Read and parse frame tpye:
-        let ft = match FrameKind::try_from(v[0]) {
+        let ft = match FrameKind::try_from(out[0]) {
             Ok(ft) => ft,
             Err(_) => return Err(ErrorKind::InvalidData.into()),
         };
 
-        let header = FrameHeader::new(encoding, ft).with_flags(&[v[1], v[2], v[3], v[4]]);
-        log::trace!("FRAME {}", header);
+        let header = FrameHeader::new(encoding, ft).with_flags(&[out[1], out[2], out[3], out[4]]);
         Ok(header)
     }
 
@@ -740,7 +743,7 @@ where
     P: io::Read,
 {
     let mut buf = [0; 1];
-    Ok(port.read_exact(&mut buf).map(|_| buf[0])?)
+    port.read_exact(&mut buf).map(|_| buf[0])
 }
 
 pub const fn escape(value: u8) -> u8 {
