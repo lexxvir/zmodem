@@ -137,8 +137,8 @@ impl FrameHeader {
         if self.encoding == Encoding::ZHEX {
             out.push(ZPAD);
         }
-
         out.push(ZDLE);
+
         out.push(self.encoding as u8);
         out.push(self.frame_type as u8);
         out.extend_from_slice(&self.flags);
@@ -160,7 +160,9 @@ impl FrameHeader {
             out.extend_from_slice(hex.as_bytes());
         }
 
+        // FIXME: Remove heap allocation:
         let mut escaped = vec![];
+        // Does not corrupt `ZHEX` as the encoding byte is not escaped:
         escape_array(&out[3..], &mut escaped);
         out.truncate(3);
         out.extend_from_slice(&escaped);
@@ -408,6 +410,7 @@ where
         match frame.frame_type() {
             FrameKind::ZRINIT => match stage {
                 Stage::Waiting => {
+                    // FIXME: Remove heap allocation:
                     let mut buf = vec![];
 
                     ZFILE_HEADER.write(port)?;
@@ -477,6 +480,7 @@ where
             FrameKind::ZFILE => match stage {
                 Stage::Waiting | Stage::Ready => {
                     assert_eq!(count, 0);
+                    // FIXME: Remove heap allocation:
                     let mut buf = Vec::new();
                     match read_subpacket(port, frame.encoding(), &mut buf).map(|_| ()) {
                         Err(ref err) if err.kind() == ErrorKind::InvalidData => {
@@ -563,6 +567,7 @@ where
     P: Write + Read,
     F: Write,
 {
+    // FIXME: Remove heap allocation:
     let mut buf = Vec::new();
 
     loop {
@@ -624,6 +629,7 @@ where
 }
 
 /// Reads and unescapes a ZMODEM protocol subpacket
+// FIXME: Remove heap allocation
 fn read_subpacket<P>(port: &mut P, encoding: Encoding, buf: &mut Vec<u8>) -> io::Result<PacketKind>
 where
     P: Read,
@@ -669,10 +675,11 @@ where
 {
     let subpacket_type = subpacket_type as u8;
 
+    // FIXME: Remove heap allocation:
     let mut esc_data = vec![];
     escape_array(data, &mut esc_data);
     port.write_all(&esc_data)?;
-
+    // FIXME: Remove heap allocation:
     let mut esc_crc = vec![];
 
     match encoding {
@@ -774,6 +781,7 @@ pub const fn unescape(value: u8) -> u8 {
     }
 }
 
+// FIXME: Remove heap allocation:
 pub fn escape_array(src: &[u8], dst: &mut Vec<u8>) {
     for value in src {
         let escaped = escape(*value);
