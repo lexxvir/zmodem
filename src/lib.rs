@@ -36,9 +36,8 @@ pub const XON: u8 = 0x11;
 pub const SUBPACKET_SIZE: usize = 1024;
 pub const SUBPACKET_PER_ACK: usize = 10;
 
-/// Buffer size for the escaped header. An escaped `ZHEX` header can
-/// theoretically take 36 bytes from which this number is derived from:
-pub const HEADER_SIZE: usize = 64;
+/// Buffer size for the escaped header.
+pub const HEADER_SIZE: usize = 32;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -82,12 +81,6 @@ impl FrameHeader {
             // subtraction:
             Encoding::ZHEX => (core::mem::size_of::<FrameHeader>() + 2) * 2 - 1,
         }
-    }
-
-    /// Returns escaped size of the header in the worst case scenario, i.e.
-    /// when all bytes have been escaped.
-    pub const fn escaped_size(encoding: Encoding) -> usize {
-        2 * (Self::unescaped_size(encoding) - 1) + 1
     }
 
     pub const fn encoding(&self) -> Encoding {
