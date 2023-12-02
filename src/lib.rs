@@ -115,18 +115,7 @@ impl FrameHeader {
             out.truncate(out.len() / 2);
         }
 
-        let crc1 = &out[5..];
-        let mut crc2 = ArrayVec::<[u8; 4]>::new();
-
-        match encoding {
-            Encoding::ZBIN32 => crc2.extend_from_slice(&CRC32.checksum(&out[..5]).to_le_bytes()),
-            _ => crc2.extend_from_slice(&CRC16.checksum(&out[..5]).to_be_bytes()),
-        };
-
-        if *crc1 != *crc2 {
-            log::error!("CRC mismatch: {:?} != {:?}", crc1, crc2);
-            return Err(ErrorKind::InvalidData.into());
-        }
+        check_crc(&out[..5], &out[5..], encoding)?;
 
         // Read and parse frame tpye:
         let ft = match FrameKind::try_from(out[0]) {
@@ -155,11 +144,14 @@ impl FrameHeader {
         out.extend_from_slice(&self.flags);
 
         // Skips ZPAD and encoding:
-        match self.encoding {
-            Encoding::ZBIN32 => out.extend_from_slice(&CRC32.checksum(&out[3..]).to_le_bytes()),
-            Encoding::ZHEX => out.extend_from_slice(&CRC16.checksum(&out[4..]).to_be_bytes()),
-            Encoding::ZBIN => out.extend_from_slice(&CRC16.checksum(&out[3..]).to_be_bytes()),
+        let data = if self.encoding == Encoding::ZHEX {
+            &out[4..]
+        } else {
+            &out[3..]
         };
+        let mut crc = [0u8; 4];
+        let crc_len = make_crc(data, &mut crc, self.encoding);
+        out.extend_from_slice(&crc[..crc_len]);
 
         // Skips ZPAD and encoding:
         if self.encoding == Encoding::ZHEX {
@@ -655,25 +647,14 @@ where
     }
 
     let crc_len = if encoding == Encoding::ZBIN32 { 4 } else { 2 };
-    let mut crc1 = vec![0; crc_len];
-
-    for b in &mut crc1 {
+    let mut crc = [0u8; 4];
+    for b in crc.iter_mut().take(crc_len) {
         *b = read_byte_unescaped(port)?;
     }
-
-    let crc2 = match encoding {
-        Encoding::ZBIN32 => CRC32.checksum(buf).to_le_bytes().to_vec(),
-        _ => CRC16.checksum(buf).to_be_bytes().to_vec(),
-    };
-
-    if crc1 != crc2 {
-        log::debug!("CRC mismatch: {:?} != {:?}", crc1, crc2);
-        return Err(ErrorKind::InvalidData.into());
-    }
+    check_crc(buf, &crc[..crc_len], encoding)?;
 
     // Pop ZCRC
     buf.pop().unwrap();
-
     Ok(result)
 }
 
@@ -716,6 +697,33 @@ where
     port.write_all(&esc_crc)?;
 
     Ok(())
+}
+
+fn check_crc(data: &[u8], crc: &[u8], encoding: Encoding) -> io::Result<()> {
+    let mut crc2 = [0u8; 4];
+    let crc2_len = make_crc(data, &mut crc2, encoding);
+
+    if *crc != crc2[..crc2_len] {
+        log::error!("ZCRC mismatch: {:?} != {:?}", crc, &crc2[..crc2_len]);
+        return Err(ErrorKind::InvalidData.into());
+    }
+
+    Ok(())
+}
+
+fn make_crc(data: &[u8], out: &mut [u8], encoding: Encoding) -> usize {
+    match encoding {
+        Encoding::ZBIN32 => {
+            let crc = CRC32.checksum(data).to_le_bytes();
+            out[..4].copy_from_slice(&crc[..4]);
+            4
+        }
+        _ => {
+            let crc = CRC16.checksum(data).to_be_bytes();
+            out[..2].copy_from_slice(&crc[..2]);
+            2
+        }
+    }
 }
 
 fn read_byte_unescaped<P>(port: &mut P) -> io::Result<u8>
