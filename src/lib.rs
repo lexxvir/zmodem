@@ -8,7 +8,7 @@ use core::convert::TryFrom;
 use crc::{Crc, CRC_16_XMODEM, CRC_32_ISO_HDLC};
 use std::fmt::{self, Display};
 use std::io::{self, ErrorKind, Read, Seek, SeekFrom, Write};
-use tinyvec::{array_vec, ArrayVec};
+use tinyvec::array_vec;
 
 pub const CRC16: Crc<u16> = Crc::<u16>::new(&CRC_16_XMODEM);
 pub const CRC32: Crc<u32> = Crc::<u32>::new(&CRC_32_ISO_HDLC);
@@ -33,6 +33,10 @@ pub const XON: u8 = 0x11;
 
 pub const SUBPACKET_SIZE: usize = 1024 * 8;
 pub const SUBPACKET_PER_ACK: usize = 10;
+
+/// Buffer size for escaped frame. An escaped `ZHEX` frame can theoretically
+/// take 36 bytes from which this number is derived from:
+pub const FRAME_SIZE: usize = 64;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -67,7 +71,7 @@ impl FrameHeader {
         }
     }
 
-    /// Returns unescaped size of the header, while being still serialized.
+    /// Returns unescaped size of the header.
     pub const fn unescaped_size(encoding: Encoding) -> usize {
         match encoding {
             Encoding::ZBIN => core::mem::size_of::<FrameHeader>() + 2,
@@ -76,6 +80,12 @@ impl FrameHeader {
             // subtraction:
             Encoding::ZHEX => (core::mem::size_of::<FrameHeader>() + 2) * 2 - 1,
         }
+    }
+
+    /// Returns escaped size of the header in the worst case scenario, i.e.
+    /// when all bytes have been escaped.
+    pub const fn escaped_size(encoding: Encoding) -> usize {
+        2 * (Self::unescaped_size(encoding) - 1) + 1
     }
 
     pub const fn encoding(&self) -> Encoding {
@@ -104,7 +114,7 @@ impl FrameHeader {
             Err(_) => return Err(ErrorKind::InvalidData.into()),
         };
 
-        let mut out = ArrayVec::<[u8; FrameHeader::unescaped_size(Encoding::ZHEX) - 1]>::new();
+        let mut out = array_vec!([u8; FRAME_SIZE]);
 
         for _ in 0..FrameHeader::unescaped_size(encoding) - 1 {
             out.push(read_byte_unescaped(port)?);
@@ -131,7 +141,7 @@ impl FrameHeader {
     where
         P: Write,
     {
-        let mut out = array_vec!([u8; FrameHeader::unescaped_size(Encoding::ZHEX) + 6]);
+        let mut out = array_vec!([u8; FRAME_SIZE]);
 
         out.push(ZPAD);
         if self.encoding == Encoding::ZHEX {
@@ -864,13 +874,11 @@ mod tests {
     ) {
         let mut port = vec![];
         let mut output = vec![];
-
         write_subpacket(&mut port, encoding, subpacket_type, data).unwrap();
         assert_eq!(
             read_subpacket(&mut port.as_slice(), encoding, &mut output).unwrap(),
             subpacket_type
         );
-
         assert_eq!(&output[..], data);
     }
 }
