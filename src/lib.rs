@@ -390,8 +390,6 @@ where
 
     ZRQINIT_HEADER.write(port)?;
     loop {
-        port.flush()?;
-
         match read_zpad(port) {
             Err(ref err) if err.kind() == ErrorKind::InvalidData => continue,
             Err(err) => return Err(err),
