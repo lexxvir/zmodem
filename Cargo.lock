@@ -204,8 +204,7 @@ dependencies = [
 [[package]]
 name = "hex"
 version = "0.4.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
+source = "git+https://github.com/jarkkojs/rust-hex.git?branch=feat/decode-in-slice#83a2f6b34b9e0773ddb6831a703eee1ac2594b24"
 
 [[package]]
 name = "lazy_static"

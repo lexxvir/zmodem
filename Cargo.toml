@@ -10,7 +10,7 @@ rust-version = "1.73"
 bitflags = "2.4.1"
 clap = "2.21.1"
 crc = "3.0.1"
-hex = "0.4.3"
+hex = { git = "https://github.com/jarkkojs/rust-hex.git", branch="feat/decode-in-slice" }
 log = "0.4.20"
 rstest = "0.18.2"
 tinyvec = "1.6.0"

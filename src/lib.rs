@@ -111,16 +111,8 @@ impl FrameHeader {
         }
 
         if encoding == Encoding::ZHEX {
-            let mut tmp = [0; (FrameHeader::unescaped_size(Encoding::ZHEX) - 1) / 2];
-            match hex::decode_to_slice(out, &mut tmp) {
-                Ok(x) => x,
-                _ => {
-                    log::error!("from_hex error");
-                    return Err(ErrorKind::InvalidData.into());
-                }
-            }
-            out.clear();
-            out.extend_from_slice(&tmp);
+            hex::decode_in_slice(&mut out).or::<io::Error>(Err(ErrorKind::InvalidData.into()))?;
+            out.truncate(out.len() / 2);
         }
 
         let crc1 = &out[5..];
