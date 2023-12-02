@@ -8,7 +8,7 @@ use core::convert::TryFrom;
 use crc::{Crc, CRC_16_XMODEM, CRC_32_ISO_HDLC};
 use std::fmt::{self, Display};
 use std::io::{self, ErrorKind, Read, Seek, SeekFrom, Write};
-use tinyvec::array_vec;
+use tinyvec::{array_vec, SliceVec};
 
 pub const CRC16: Crc<u16> = Crc::<u16>::new(&CRC_16_XMODEM);
 pub const CRC32: Crc<u32> = Crc::<u32>::new(&CRC_32_ISO_HDLC);
@@ -31,7 +31,9 @@ pub const ZDLE: u8 = 0x18;
 
 pub const XON: u8 = 0x11;
 
-pub const SUBPACKET_SIZE: usize = 1024 * 8;
+/// Data subpacket size according to the Section 7.4 of
+/// https://gallium.inria.fr/~doligez/zmodem/zmodem.txt
+pub const SUBPACKET_SIZE: usize = 1024;
 pub const SUBPACKET_PER_ACK: usize = 10;
 
 /// Buffer size for escaped frame. An escaped `ZHEX` frame can theoretically
@@ -170,12 +172,11 @@ impl FrameHeader {
             out.extend_from_slice(hex.as_bytes());
         }
 
-        // FIXME: Remove heap allocation:
-        let mut escaped = vec![];
+        let mut escaped = [0u8; FRAME_SIZE];
         // Does not corrupt `ZHEX` as the encoding byte is not escaped:
-        escape_array(&out[3..], &mut escaped);
+        let escaped_len = escape_array(&out[3..], &mut escaped);
         out.truncate(3);
-        out.extend_from_slice(&escaped);
+        out.extend_from_slice(&escaped[..escaped_len]);
 
         if self.encoding == Encoding::ZHEX {
             // Add trailing CRLF for ZHEX transfer:
@@ -418,9 +419,7 @@ where
         match frame.frame_type() {
             FrameKind::ZRINIT => match stage {
                 Stage::Waiting => {
-                    // FIXME: Remove heap allocation:
-                    let mut buf = vec![];
-
+                    let mut buf = array_vec!([u8; SUBPACKET_SIZE]);
                     ZFILE_HEADER.write(port)?;
                     buf.extend_from_slice(filename.as_bytes());
                     buf.push(b'\0');
@@ -683,35 +682,28 @@ where
     P: Write,
 {
     let subpacket_type = subpacket_type as u8;
-
-    // FIXME: Remove heap allocation:
-    let mut esc_data = vec![];
-    escape_array(data, &mut esc_data);
-    port.write_all(&esc_data)?;
-    // FIXME: Remove heap allocation:
-    let mut esc_crc = vec![];
-
+    let mut buf = [0u8; SUBPACKET_SIZE * 2];
+    let mut len = escape_array(data, &mut buf);
+    port.write_all(&buf[..len])?;
     match encoding {
         Encoding::ZBIN32 => {
             let mut digest = CRC32.digest();
             digest.update(data);
             digest.update(&[subpacket_type]);
-            escape_array(&digest.finalize().to_le_bytes(), &mut esc_crc)
+            len = escape_array(&digest.finalize().to_le_bytes(), &mut buf)
         }
         Encoding::ZBIN => {
             let mut digest = CRC16.digest();
             digest.update(data);
             digest.update(&[subpacket_type]);
-            escape_array(&digest.finalize().to_be_bytes(), &mut esc_crc)
+            len = escape_array(&digest.finalize().to_be_bytes(), &mut buf)
         }
         Encoding::ZHEX => {
             unimplemented!()
         }
     };
-
     port.write_all(&[ZDLE, subpacket_type])?;
-    port.write_all(&esc_crc)?;
-
+    port.write_all(&buf[..len])?;
     Ok(())
 }
 
@@ -790,8 +782,8 @@ pub const fn unescape(value: u8) -> u8 {
     }
 }
 
-// FIXME: Remove heap allocation:
-pub fn escape_array(src: &[u8], dst: &mut Vec<u8>) {
+fn escape_array(src: &[u8], dst: &mut [u8]) -> usize {
+    let mut dst = SliceVec::from_slice_len(dst, 0);
     for value in src {
         let escaped = escape(*value);
         if escaped != *value {
@@ -799,6 +791,7 @@ pub fn escape_array(src: &[u8], dst: &mut Vec<u8>) {
         }
         dst.push(escaped);
     }
+    dst.len()
 }
 
 #[cfg(test)]
