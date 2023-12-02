@@ -36,23 +36,23 @@ pub const XON: u8 = 0x11;
 pub const SUBPACKET_SIZE: usize = 1024;
 pub const SUBPACKET_PER_ACK: usize = 10;
 
-/// Buffer size for escaped frame. An escaped `ZHEX` frame can theoretically
-/// take 36 bytes from which this number is derived from:
-pub const FRAME_SIZE: usize = 64;
+/// Buffer size for the escaped header. An escaped `ZHEX` header can
+/// theoretically take 36 bytes from which this number is derived from:
+pub const HEADER_SIZE: usize = 64;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FrameHeader {
     encoding: Encoding,
-    frame_type: FrameKind,
+    kind: FrameKind,
     flags: [u8; 4],
 }
 
 impl FrameHeader {
-    pub const fn new(encoding: Encoding, frame_type: FrameKind) -> FrameHeader {
+    pub const fn new(encoding: Encoding, kind: FrameKind) -> FrameHeader {
         FrameHeader {
             encoding,
-            frame_type,
+            kind,
             flags: [0; 4],
         }
     }
@@ -60,7 +60,7 @@ impl FrameHeader {
     pub const fn with_count(&self, count: u32) -> Self {
         FrameHeader {
             encoding: self.encoding,
-            frame_type: self.frame_type,
+            kind: self.kind,
             flags: count.to_le_bytes(),
         }
     }
@@ -68,7 +68,7 @@ impl FrameHeader {
     pub const fn with_flags(&self, flags: &[u8; 4]) -> Self {
         FrameHeader {
             encoding: self.encoding,
-            frame_type: self.frame_type,
+            kind: self.kind,
             flags: *flags,
         }
     }
@@ -94,8 +94,8 @@ impl FrameHeader {
         self.encoding
     }
 
-    pub const fn frame_type(&self) -> FrameKind {
-        self.frame_type
+    pub const fn kind(&self) -> FrameKind {
+        self.kind
     }
 
     pub const fn count(&self) -> u32 {
@@ -116,7 +116,7 @@ impl FrameHeader {
             Err(_) => return Err(ErrorKind::InvalidData.into()),
         };
 
-        let mut out = array_vec!([u8; FRAME_SIZE]);
+        let mut out = array_vec!([u8; HEADER_SIZE]);
 
         for _ in 0..FrameHeader::unescaped_size(encoding) - 1 {
             out.push(read_byte_unescaped(port)?);
@@ -143,7 +143,7 @@ impl FrameHeader {
     where
         P: Write,
     {
-        let mut out = array_vec!([u8; FRAME_SIZE]);
+        let mut out = array_vec!([u8; HEADER_SIZE]);
 
         out.push(ZPAD);
         if self.encoding == Encoding::ZHEX {
@@ -152,7 +152,7 @@ impl FrameHeader {
         out.push(ZDLE);
 
         out.push(self.encoding as u8);
-        out.push(self.frame_type as u8);
+        out.push(self.kind as u8);
         out.extend_from_slice(&self.flags);
 
         // Skips ZPAD and encoding:
@@ -172,7 +172,7 @@ impl FrameHeader {
             out.extend_from_slice(hex.as_bytes());
         }
 
-        let mut escaped = [0u8; FRAME_SIZE];
+        let mut escaped = [0u8; HEADER_SIZE];
         // Does not corrupt `ZHEX` as the encoding byte is not escaped:
         let escaped_len = escape_array(&out[3..], &mut escaped);
         out.truncate(3);
@@ -182,7 +182,7 @@ impl FrameHeader {
             // Add trailing CRLF for ZHEX transfer:
             out.extend_from_slice(b"\r\n");
 
-            if self.frame_type != FrameKind::ZACK && self.frame_type != FrameKind::ZFIN {
+            if self.kind != FrameKind::ZACK && self.kind != FrameKind::ZFIN {
                 out.push(XON);
             }
         }
@@ -193,14 +193,14 @@ impl FrameHeader {
 
 impl fmt::Display for FrameHeader {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{:8} {}", self.encoding, self.frame_type)
+        write!(f, "{:8} {}", self.encoding, self.kind)
     }
 }
 
 #[repr(u8)]
 #[allow(clippy::upper_case_acronyms)]
 #[derive(Clone, Copy, Debug, PartialEq)]
-/// The ZMODEM frame type
+/// Frame encodings
 pub enum Encoding {
     ZBIN = 0x41,
     ZHEX = 0x42,
@@ -232,7 +232,7 @@ impl Display for Encoding {
 #[repr(u8)]
 #[allow(clippy::upper_case_acronyms)]
 #[derive(Clone, Copy, Debug, PartialEq)]
-/// The ZMODEM frame type
+/// Frame types
 pub enum FrameKind {
     /// Request receive init
     ZRQINIT = 0,
@@ -416,7 +416,7 @@ where
             Ok(frame) => frame,
         };
 
-        match frame.frame_type() {
+        match frame.kind() {
             FrameKind::ZRINIT => match stage {
                 Stage::Waiting => {
                     let mut buf = array_vec!([u8; SUBPACKET_SIZE]);
@@ -484,7 +484,7 @@ where
             Ok(frame) => frame,
         };
 
-        match frame.frame_type() {
+        match frame.kind() {
             FrameKind::ZFILE => match stage {
                 Stage::Waiting | Stage::Ready => {
                     assert_eq!(count, 0);
@@ -648,9 +648,9 @@ where
         let byte = read_byte(port)?;
         if byte == ZDLE {
             let byte = read_byte(port)?;
-            if let Ok(sp_type) = PacketKind::try_from(byte) {
-                buf.push(sp_type as u8);
-                result = sp_type;
+            if let Ok(kind) = PacketKind::try_from(byte) {
+                buf.push(kind as u8);
+                result = kind;
                 break;
             } else {
                 buf.push(unescape(byte));
@@ -675,13 +675,13 @@ where
 fn write_subpacket<P>(
     port: &mut P,
     encoding: Encoding,
-    subpacket_type: PacketKind,
+    kind: PacketKind,
     data: &[u8],
 ) -> io::Result<()>
 where
     P: Write,
 {
-    let subpacket_type = subpacket_type as u8;
+    let kind = kind as u8;
     let mut buf = [0u8; SUBPACKET_SIZE * 2];
     let mut len = escape_array(data, &mut buf);
     port.write_all(&buf[..len])?;
@@ -689,20 +689,20 @@ where
         Encoding::ZBIN32 => {
             let mut digest = CRC32.digest();
             digest.update(data);
-            digest.update(&[subpacket_type]);
+            digest.update(&[kind]);
             len = escape_array(&digest.finalize().to_le_bytes(), &mut buf)
         }
         Encoding::ZBIN => {
             let mut digest = CRC16.digest();
             digest.update(data);
-            digest.update(&[subpacket_type]);
+            digest.update(&[kind]);
             len = escape_array(&digest.finalize().to_be_bytes(), &mut buf)
         }
         Encoding::ZHEX => {
             unimplemented!()
         }
     };
-    port.write_all(&[ZDLE, subpacket_type])?;
+    port.write_all(&[ZDLE, kind])?;
     port.write_all(&buf[..len])?;
     Ok(())
 }
@@ -806,10 +806,10 @@ mod tests {
     #[case(Encoding::ZBIN32, FrameKind::ZRQINIT, &[ZPAD, ZDLE, Encoding::ZBIN32 as u8, 0, 0, 0, 0, 0, 29, 247, 34, 198])]
     pub fn test_header(
         #[case] encoding: Encoding,
-        #[case] frame_type: FrameKind,
+        #[case] kind: FrameKind,
         #[case] expected: &[u8],
     ) {
-        let header = FrameHeader::new(encoding, frame_type).with_flags(&[0; 4]);
+        let header = FrameHeader::new(encoding, kind).with_flags(&[0; 4]);
         let mut port = vec![];
         header.write(&mut port).unwrap();
         assert_eq!(port, expected);
@@ -820,11 +820,11 @@ mod tests {
     #[case(Encoding::ZHEX, FrameKind::ZRQINIT, &[1, 1, 1, 1], &[ZPAD, ZPAD, ZDLE, Encoding::ZHEX as u8, b'0', b'0', b'0', b'1', b'0', b'1', b'0', b'1', b'0', b'1', 54, 50, 57, 52, b'\r', b'\n', XON])]
     pub fn test_header_with_flags(
         #[case] encoding: Encoding,
-        #[case] frame_type: FrameKind,
+        #[case] kind: FrameKind,
         #[case] flags: &[u8; 4],
         #[case] expected: &[u8],
     ) {
-        let header = FrameHeader::new(encoding, frame_type).with_flags(flags);
+        let header = FrameHeader::new(encoding, kind).with_flags(flags);
         let mut port = vec![];
         header.write(&mut port).unwrap();
         assert_eq!(port, expected);
@@ -862,15 +862,15 @@ mod tests {
     #[case(Encoding::ZBIN32, PacketKind::ZCRCQ, &[0, 1, 2, 3, 4, 0x60, 0x60])]
     pub fn test_write_read_subpacket(
         #[case] encoding: Encoding,
-        #[case] subpacket_type: PacketKind,
+        #[case] kind: PacketKind,
         #[case] data: &[u8],
     ) {
         let mut port = vec![];
         let mut output = vec![];
-        write_subpacket(&mut port, encoding, subpacket_type, data).unwrap();
+        write_subpacket(&mut port, encoding, kind, data).unwrap();
         assert_eq!(
             read_subpacket(&mut port.as_slice(), encoding, &mut output).unwrap(),
-            subpacket_type
+            kind
         );
         assert_eq!(&output[..], data);
     }
