@@ -452,6 +452,7 @@ where
     P: Read + Write,
     F: Write,
 {
+    // FIXME: Remove heap allocation. Will be replaced with internal buffer.
     let port = &mut port::Port::new(port);
     let mut stage = Stage::Waiting;
     let mut count = 0;
