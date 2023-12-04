@@ -18,8 +18,6 @@ pub const XON: u8 = 0x11;
 pub const ZACK_HEADER: Header = Header::new(Encoding::ZHEX, FrameKind::ZACK);
 pub const ZDATA_HEADER: Header = Header::new(Encoding::ZBIN32, FrameKind::ZDATA);
 pub const ZEOF_HEADER: Header = Header::new(Encoding::ZBIN32, FrameKind::ZEOF);
-/// TODO: support conversion option in `flags[0]`
-pub const ZFILE_HEADER: Header = Header::new(Encoding::ZBIN32, FrameKind::ZFILE);
 pub const ZFIN_HEADER: Header = Header::new(Encoding::ZHEX, FrameKind::ZFIN);
 pub const ZNAK_HEADER: Header = Header::new(Encoding::ZHEX, FrameKind::ZNAK);
 pub const ZRPOS_HEADER: Header = Header::new(Encoding::ZHEX, FrameKind::ZRPOS);
@@ -77,6 +75,25 @@ impl Header {
             flags: [count[0], count[1], 0, zrinit.bits()],
         }
         .write(port)
+    }
+
+    pub fn write_zfile<P>(port: &mut P, zfile: &Zfile) -> io::Result<()>
+    where
+        P: Write,
+    {
+        let mut buf = array_vec!([u8; SUBPACKET_SIZE]);
+
+        buf.extend_from_slice(zfile.name.as_bytes());
+        buf.push(b'\0');
+        buf.extend_from_slice(zfile.size.to_string().as_bytes());
+        buf.push(b'\0');
+        Self {
+            encoding: Encoding::ZBIN32,
+            kind: FrameKind::ZFILE,
+            flags: [0; 4],
+        }
+        .write(port)?;
+        write_subpacket(port, Encoding::ZBIN32, PacketKind::ZCRCW, &buf)
     }
 
     pub fn write<P>(&self, port: &mut P) -> io::Result<()>
@@ -321,6 +338,11 @@ bitflags! {
     }
 }
 
+pub struct Zfile<'a> {
+    name: &'a str,
+    size: u32,
+}
+
 #[repr(u8)]
 #[allow(clippy::upper_case_acronyms)]
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -366,12 +388,7 @@ enum Stage {
 }
 
 /// Sends a file using the ZMODEM file transfer protocol.
-pub fn write<P, F>(
-    port: &mut P,
-    file: &mut F,
-    filename: &str,
-    filesize: Option<u32>,
-) -> io::Result<()>
+pub fn write<P, F>(port: &mut P, file: &mut F, name: &str, size: Option<u32>) -> io::Result<()>
 where
     P: Read + Write,
     F: Read + Seek,
@@ -398,15 +415,8 @@ where
         match frame.kind() {
             FrameKind::ZRINIT => match stage {
                 Stage::Waiting => {
-                    let mut buf = array_vec!([u8; SUBPACKET_SIZE]);
-                    ZFILE_HEADER.write(port)?;
-                    buf.extend_from_slice(filename.as_bytes());
-                    buf.push(b'\0');
-                    if let Some(size) = filesize {
-                        buf.extend_from_slice(size.to_string().as_bytes());
-                    }
-                    buf.push(b'\0');
-                    write_subpacket(port, Encoding::ZBIN32, PacketKind::ZCRCW, &buf)?;
+                    let size = size.unwrap_or(0);
+                    Header::write_zfile(port, &Zfile { name, size })?;
                     stage = Stage::Ready;
                 }
                 Stage::Ready => (),
