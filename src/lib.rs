@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //! ZMODEM file transfer protocol
 
-mod port;
-
 use bitflags::bitflags;
 use core::convert::TryFrom;
 use crc::{Crc, CRC_16_XMODEM, CRC_32_ISO_HDLC};
@@ -452,8 +450,6 @@ where
     P: Read + Write,
     F: Write,
 {
-    // FIXME: Remove heap allocation. Will be replaced with internal buffer.
-    let port = &mut port::Port::new(port);
     let mut stage = Stage::Waiting;
     let mut count = 0;
 
