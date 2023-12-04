@@ -8,7 +8,7 @@ use core::convert::TryFrom;
 use crc::{Crc, CRC_16_XMODEM, CRC_32_ISO_HDLC};
 use std::fmt::{self, Display};
 use std::io::{self, ErrorKind, Read, Seek, SeekFrom, Write};
-use tinyvec::{array_vec, SliceVec};
+use tinyvec::{array_vec, ArrayVec, SliceVec};
 
 pub const CRC16: Crc<u16> = Crc::<u16>::new(&CRC_16_XMODEM);
 pub const CRC32: Crc<u32> = Crc::<u32>::new(&CRC_32_ISO_HDLC);
@@ -34,6 +34,8 @@ pub const SUBPACKET_SIZE: usize = 1024;
 pub const SUBPACKET_PER_ACK: usize = 10;
 /// Buffer size for the escaped header.
 pub const HEADER_SIZE: usize = 32;
+
+type RxBuffer = ArrayVec<[u8; 2048]>;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -477,8 +479,7 @@ where
             FrameKind::ZFILE => match stage {
                 Stage::Waiting | Stage::Ready => {
                     assert_eq!(count, 0);
-                    // FIXME: Remove heap allocation:
-                    let mut buf = Vec::new();
+                    let mut buf = RxBuffer::new();
                     match read_subpacket(port, frame.encoding(), &mut buf).map(|_| ()) {
                         Err(ref err) if err.kind() == ErrorKind::InvalidData => {
                             ZNAK_HEADER.write(port)
@@ -564,8 +565,7 @@ where
     P: Write + Read,
     F: Write,
 {
-    // FIXME: Remove heap allocation:
-    let mut buf = Vec::new();
+    let mut buf = RxBuffer::new();
 
     loop {
         buf.clear();
@@ -626,8 +626,7 @@ where
 }
 
 /// Reads and unescapes a ZMODEM protocol subpacket
-// FIXME: Remove heap allocation
-fn read_subpacket<P>(port: &mut P, encoding: Encoding, buf: &mut Vec<u8>) -> io::Result<PacketKind>
+fn read_subpacket<P>(port: &mut P, encoding: Encoding, buf: &mut RxBuffer) -> io::Result<PacketKind>
 where
     P: Read,
 {
@@ -786,8 +785,8 @@ fn escape_array(src: &[u8], dst: &mut [u8]) -> usize {
 #[cfg(test)]
 mod tests {
     use crate::{
-        read_subpacket, read_zpad, write_subpacket, Encoding, FrameKind, Header, PacketKind, XON,
-        ZDLE, ZPAD,
+        read_subpacket, read_zpad, write_subpacket, Encoding, FrameKind, Header, PacketKind,
+        RxBuffer, XON, ZDLE, ZPAD,
     };
 
     #[rstest::rstest]
@@ -852,12 +851,12 @@ mod tests {
         #[case] data: &[u8],
     ) {
         let mut port = vec![];
-        let mut output = vec![];
         write_subpacket(&mut port, encoding, kind, data).unwrap();
+        let mut rx_buf = RxBuffer::new();
         assert_eq!(
-            read_subpacket(&mut port.as_slice(), encoding, &mut output).unwrap(),
+            read_subpacket(&mut port.as_slice(), encoding, &mut rx_buf).unwrap(),
             kind
         );
-        assert_eq!(&output[..], data);
+        assert_eq!(&rx_buf[..], data);
     }
 }
