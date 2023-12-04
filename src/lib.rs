@@ -18,15 +18,12 @@ pub const XON: u8 = 0x11;
 pub const ZACK_HEADER: Header = Header::new(Encoding::ZHEX, FrameKind::ZACK);
 pub const ZDATA_HEADER: Header = Header::new(Encoding::ZBIN32, FrameKind::ZDATA);
 pub const ZEOF_HEADER: Header = Header::new(Encoding::ZBIN32, FrameKind::ZEOF);
-pub const ZFILE_HEADER: Header =
-    Header::new(Encoding::ZBIN32, FrameKind::ZFILE).with_flags(&[0, 0, 0, 0x23]);
+/// TODO: support conversion option in `flags[0]`
+pub const ZFILE_HEADER: Header = Header::new(Encoding::ZBIN32, FrameKind::ZFILE);
 pub const ZFIN_HEADER: Header = Header::new(Encoding::ZHEX, FrameKind::ZFIN);
 pub const ZNAK_HEADER: Header = Header::new(Encoding::ZHEX, FrameKind::ZNAK);
-pub const ZRINIT_HEADER: Header =
-    Header::new(Encoding::ZHEX, FrameKind::ZRINIT).with_flags(&[0, 0, 0, 0x23]);
 pub const ZRPOS_HEADER: Header = Header::new(Encoding::ZHEX, FrameKind::ZRPOS);
-pub const ZRQINIT_HEADER: Header =
-    Header::new(Encoding::ZHEX, FrameKind::ZRQINIT).with_flags(&[0, 0, 0, 0x23]);
+pub const ZRQINIT_HEADER: Header = Header::new(Encoding::ZHEX, FrameKind::ZRQINIT);
 
 pub const SUBPACKET_SIZE: usize = 1024;
 pub const SUBPACKET_PER_ACK: usize = 10;
@@ -44,12 +41,107 @@ pub struct Header {
 }
 
 impl Header {
-    pub const fn new(encoding: Encoding, kind: FrameKind) -> Header {
-        Header {
+    pub const fn new(encoding: Encoding, kind: FrameKind) -> Self {
+        Self {
             encoding,
             kind,
             flags: [0; 4],
         }
+    }
+
+    pub const fn encoding(&self) -> Encoding {
+        self.encoding
+    }
+
+    pub const fn kind(&self) -> FrameKind {
+        self.kind
+    }
+
+    pub const fn count(&self) -> u32 {
+        u32::from_le_bytes(self.flags)
+    }
+
+    pub fn write_zrinit<P>(
+        port: &mut P,
+        encoding: Encoding,
+        zrinit: Zrinit,
+        count: u16,
+    ) -> io::Result<()>
+    where
+        P: Write,
+    {
+        let count = count.to_le_bytes();
+        Self {
+            encoding,
+            kind: FrameKind::ZRINIT,
+            flags: [count[0], count[1], 0, zrinit.bits()],
+        }
+        .write(port)
+    }
+
+    pub fn write<P>(&self, port: &mut P) -> io::Result<()>
+    where
+        P: Write,
+    {
+        let mut out = array_vec!([u8; HEADER_SIZE]);
+        out.push(ZPAD);
+        if self.encoding == Encoding::ZHEX {
+            out.push(ZPAD);
+        }
+        out.push(ZDLE);
+        out.push(self.encoding as u8);
+        out.push(self.kind as u8);
+        out.extend_from_slice(&self.flags);
+        // Skips ZPAD and encoding:
+        let data = if self.encoding == Encoding::ZHEX {
+            &out[4..]
+        } else {
+            &out[3..]
+        };
+        let mut crc = [0u8; 4];
+        let crc_len = make_crc(data, &mut crc, self.encoding);
+        out.extend_from_slice(&crc[..crc_len]);
+        // Skips ZPAD and encoding:
+        if self.encoding == Encoding::ZHEX {
+            let hex = hex::encode(&out[4..]);
+            out.truncate(4);
+            out.extend_from_slice(hex.as_bytes());
+        }
+        let mut escaped = [0u8; HEADER_SIZE];
+        // Does not corrupt `ZHEX` as the encoding byte is not escaped:
+        let escaped_len = escape_array(&out[3..], &mut escaped);
+        out.truncate(3);
+        out.extend_from_slice(&escaped[..escaped_len]);
+        if self.encoding == Encoding::ZHEX {
+            // Add trailing CRLF for ZHEX transfer:
+            out.extend_from_slice(b"\r\n");
+            if self.kind != FrameKind::ZACK && self.kind != FrameKind::ZFIN {
+                out.push(XON);
+            }
+        }
+        port.write_all(&out)
+    }
+
+    pub fn read<P>(port: &mut P) -> io::Result<Header>
+    where
+        P: Read,
+    {
+        let encoding = Encoding::try_from(read_byte(port)?)
+            .or::<io::Error>(Err(ErrorKind::InvalidData.into()))?;
+        let mut out = array_vec!([u8; HEADER_SIZE]);
+        for _ in 0..Header::unescaped_size(encoding) - 1 {
+            out.push(read_byte_unescaped(port)?);
+        }
+        if encoding == Encoding::ZHEX {
+            hex::decode_in_slice(&mut out).or::<io::Error>(Err(ErrorKind::InvalidData.into()))?;
+            out.truncate(out.len() / 2);
+        }
+        check_crc(&out[..5], &out[5..], encoding)?;
+        let kind =
+            FrameKind::try_from(out[0]).or::<io::Error>(Err(ErrorKind::InvalidData.into()))?;
+        let mut header = Header::new(encoding, kind);
+        header.flags.copy_from_slice(&out[1..=4]);
+        Ok(header)
     }
 
     pub const fn with_count(&self, count: u32) -> Self {
@@ -68,8 +160,7 @@ impl Header {
         }
     }
 
-    /// Returns unescaped size of the header.
-    pub const fn unescaped_size(encoding: Encoding) -> usize {
+    const fn unescaped_size(encoding: Encoding) -> usize {
         match encoding {
             Encoding::ZBIN => core::mem::size_of::<Header>() + 2,
             Encoding::ZBIN32 => core::mem::size_of::<Header>() + 4,
@@ -77,106 +168,6 @@ impl Header {
             // subtraction:
             Encoding::ZHEX => (core::mem::size_of::<Header>() + 2) * 2 - 1,
         }
-    }
-
-    pub const fn encoding(&self) -> Encoding {
-        self.encoding
-    }
-
-    pub const fn kind(&self) -> FrameKind {
-        self.kind
-    }
-
-    pub const fn count(&self) -> u32 {
-        u32::from_le_bytes(self.flags)
-    }
-
-    pub fn read<P>(port: &mut P) -> io::Result<Header>
-    where
-        P: Read,
-    {
-        // Read encoding byte:
-        let mut enc_raw = [0; 1];
-        let enc_raw = port.read_exact(&mut enc_raw).map(|_| enc_raw[0])?;
-
-        // Parse encoding byte:
-        let encoding = match Encoding::try_from(enc_raw) {
-            Ok(encoding) => encoding,
-            Err(_) => return Err(ErrorKind::InvalidData.into()),
-        };
-
-        let mut out = array_vec!([u8; HEADER_SIZE]);
-
-        for _ in 0..Header::unescaped_size(encoding) - 1 {
-            out.push(read_byte_unescaped(port)?);
-        }
-
-        if encoding == Encoding::ZHEX {
-            hex::decode_in_slice(&mut out).or::<io::Error>(Err(ErrorKind::InvalidData.into()))?;
-            out.truncate(out.len() / 2);
-        }
-
-        check_crc(&out[..5], &out[5..], encoding)?;
-
-        // Read and parse frame tpye:
-        let ft = match FrameKind::try_from(out[0]) {
-            Ok(ft) => ft,
-            Err(_) => return Err(ErrorKind::InvalidData.into()),
-        };
-
-        let header = Header::new(encoding, ft).with_flags(&[out[1], out[2], out[3], out[4]]);
-        Ok(header)
-    }
-
-    pub fn write<P>(&self, port: &mut P) -> io::Result<()>
-    where
-        P: Write,
-    {
-        let mut out = array_vec!([u8; HEADER_SIZE]);
-
-        out.push(ZPAD);
-        if self.encoding == Encoding::ZHEX {
-            out.push(ZPAD);
-        }
-        out.push(ZDLE);
-
-        out.push(self.encoding as u8);
-        out.push(self.kind as u8);
-        out.extend_from_slice(&self.flags);
-
-        // Skips ZPAD and encoding:
-        let data = if self.encoding == Encoding::ZHEX {
-            &out[4..]
-        } else {
-            &out[3..]
-        };
-        let mut crc = [0u8; 4];
-        let crc_len = make_crc(data, &mut crc, self.encoding);
-        out.extend_from_slice(&crc[..crc_len]);
-
-        // Skips ZPAD and encoding:
-        if self.encoding == Encoding::ZHEX {
-            let hex = hex::encode(&out[4..]);
-            out.truncate(4);
-            out.extend_from_slice(hex.as_bytes());
-        }
-
-        let mut escaped = [0u8; HEADER_SIZE];
-        // Does not corrupt `ZHEX` as the encoding byte is not escaped:
-        let escaped_len = escape_array(&out[3..], &mut escaped);
-        out.truncate(3);
-        out.extend_from_slice(&escaped[..escaped_len]);
-
-        if self.encoding == Encoding::ZHEX {
-            // Add trailing CRLF for ZHEX transfer:
-            out.extend_from_slice(b"\r\n");
-
-            if self.kind != FrameKind::ZACK && self.kind != FrameKind::ZFIN {
-                out.push(XON);
-            }
-        }
-
-        port.write_all(&out)
     }
 }
 
@@ -225,7 +216,7 @@ impl Display for Encoding {
 pub enum FrameKind {
     /// Request receive init
     ZRQINIT = 0,
-    /// Receive init
+    /// Receiver capabilities and packet size
     ZRINIT = 1,
     /// Send init sequence (optional)
     ZSINIT = 2,
@@ -308,11 +299,9 @@ impl Display for FrameKind {
     }
 }
 
-// TODO: Take into use.
 bitflags! {
-    /// Flags used as part of ZRINIT to notify the sender about receivers
-    /// capabilities.
-    pub struct ReceiverFlags: u8 {
+   /// `ZRINIT` flags
+   pub struct Zrinit: u8 {
         /// Can send and receive in full-duplex
         const CANFDX = 0x01;
         /// Can receive data in parallel with disk I/O
@@ -331,6 +320,7 @@ bitflags! {
         const ESC8 = 0x80;
     }
 }
+
 #[repr(u8)]
 #[allow(clippy::upper_case_acronyms)]
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -453,15 +443,18 @@ where
     let mut stage = Stage::Waiting;
     let mut count = 0;
 
-    ZRINIT_HEADER.write(port)?;
-
+    Header::write_zrinit(
+        port,
+        Encoding::ZHEX,
+        Zrinit::CANCRY | Zrinit::CANOVIO | Zrinit::CANFC32,
+        0,
+    )?;
     loop {
         match read_zpad(port) {
             Err(ref err) if err.kind() == ErrorKind::InvalidData => continue,
             Err(err) => return Err(err),
             _ => (),
         }
-
         let frame = match Header::read(port) {
             Err(ref err) if err.kind() == ErrorKind::InvalidData => {
                 ZNAK_HEADER.write(port)?;
@@ -470,7 +463,6 @@ where
             Err(err) => return Err(err),
             Ok(frame) => frame,
         };
-
         match frame.kind() {
             FrameKind::ZFILE => match stage {
                 Stage::Waiting | Stage::Ready => {
@@ -496,7 +488,12 @@ where
                     }
                     stage = Stage::Receiving;
                 }
-                Stage::Waiting => ZRINIT_HEADER.write(port)?,
+                Stage::Waiting => Header::write_zrinit(
+                    port,
+                    Encoding::ZHEX,
+                    Zrinit::CANCRY | Zrinit::CANOVIO | Zrinit::CANFC32,
+                    0,
+                )?,
             },
             FrameKind::ZEOF if stage == Stage::Receiving => {
                 if frame.count() != count {
@@ -506,7 +503,12 @@ where
                         count
                     );
                 } else {
-                    ZRINIT_HEADER.write(port)?
+                    Header::write_zrinit(
+                        port,
+                        Encoding::ZHEX,
+                        Zrinit::CANCRY | Zrinit::CANOVIO | Zrinit::CANFC32,
+                        0,
+                    )?
                 }
             }
             FrameKind::ZFIN if stage == Stage::Receiving => {
@@ -514,7 +516,12 @@ where
                 break;
             }
             _ if stage == Stage::Waiting => {
-                ZRINIT_HEADER.write(port)?;
+                Header::write_zrinit(
+                    port,
+                    Encoding::ZHEX,
+                    Zrinit::CANCRY | Zrinit::CANOVIO | Zrinit::CANFC32,
+                    0,
+                )?;
             }
             _ => (),
         }
@@ -565,12 +572,8 @@ where
 
     loop {
         buf.clear();
-
-        let encoding = match encoding.try_into() {
-            Ok(encoding) => encoding,
-            Err(_) => return Err(ErrorKind::InvalidData.into()),
-        };
-
+        let encoding =
+            Encoding::try_from(encoding).or::<io::Error>(Err(ErrorKind::InvalidData.into()))?;
         let zcrc = match read_subpacket(port, encoding, &mut buf) {
             Err(ref err) if err.kind() == ErrorKind::InvalidData => {
                 ZRPOS_HEADER.with_count(*count).write(port)?;
@@ -579,10 +582,8 @@ where
             Err(err) => return Err(err),
             Ok(zcrc) => zcrc,
         };
-
         file.write_all(&buf)?;
         *count += buf.len() as u32;
-
         match zcrc {
             PacketKind::ZCRCW => {
                 ZACK_HEADER.with_count(*count).write(port)?;
