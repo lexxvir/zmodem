@@ -13,43 +13,39 @@ use tinyvec::{array_vec, SliceVec};
 pub const CRC16: Crc<u16> = Crc::<u16>::new(&CRC_16_XMODEM);
 pub const CRC32: Crc<u32> = Crc::<u32>::new(&CRC_32_ISO_HDLC);
 
-pub const ZACK_HEADER: FrameHeader = FrameHeader::new(Encoding::ZHEX, FrameKind::ZACK);
-pub const ZDATA_HEADER: FrameHeader = FrameHeader::new(Encoding::ZBIN32, FrameKind::ZDATA);
-pub const ZEOF_HEADER: FrameHeader = FrameHeader::new(Encoding::ZBIN32, FrameKind::ZEOF);
-pub const ZFILE_HEADER: FrameHeader =
-    FrameHeader::new(Encoding::ZBIN32, FrameKind::ZFILE).with_flags(&[0, 0, 0, 0x23]);
-pub const ZFIN_HEADER: FrameHeader = FrameHeader::new(Encoding::ZHEX, FrameKind::ZFIN);
-pub const ZNAK_HEADER: FrameHeader = FrameHeader::new(Encoding::ZHEX, FrameKind::ZNAK);
-pub const ZRINIT_HEADER: FrameHeader =
-    FrameHeader::new(Encoding::ZHEX, FrameKind::ZRINIT).with_flags(&[0, 0, 0, 0x23]);
-pub const ZRPOS_HEADER: FrameHeader = FrameHeader::new(Encoding::ZHEX, FrameKind::ZRPOS);
-pub const ZRQINIT_HEADER: FrameHeader =
-    FrameHeader::new(Encoding::ZHEX, FrameKind::ZRQINIT).with_flags(&[0, 0, 0, 0x23]);
-
 pub const ZPAD: u8 = b'*';
 pub const ZDLE: u8 = 0x18;
-
 pub const XON: u8 = 0x11;
 
-/// Data subpacket size according to the Section 7.4 of
-/// https://gallium.inria.fr/~doligez/zmodem/zmodem.txt
+pub const ZACK_HEADER: Header = Header::new(Encoding::ZHEX, FrameKind::ZACK);
+pub const ZDATA_HEADER: Header = Header::new(Encoding::ZBIN32, FrameKind::ZDATA);
+pub const ZEOF_HEADER: Header = Header::new(Encoding::ZBIN32, FrameKind::ZEOF);
+pub const ZFILE_HEADER: Header =
+    Header::new(Encoding::ZBIN32, FrameKind::ZFILE).with_flags(&[0, 0, 0, 0x23]);
+pub const ZFIN_HEADER: Header = Header::new(Encoding::ZHEX, FrameKind::ZFIN);
+pub const ZNAK_HEADER: Header = Header::new(Encoding::ZHEX, FrameKind::ZNAK);
+pub const ZRINIT_HEADER: Header =
+    Header::new(Encoding::ZHEX, FrameKind::ZRINIT).with_flags(&[0, 0, 0, 0x23]);
+pub const ZRPOS_HEADER: Header = Header::new(Encoding::ZHEX, FrameKind::ZRPOS);
+pub const ZRQINIT_HEADER: Header =
+    Header::new(Encoding::ZHEX, FrameKind::ZRQINIT).with_flags(&[0, 0, 0, 0x23]);
+
 pub const SUBPACKET_SIZE: usize = 1024;
 pub const SUBPACKET_PER_ACK: usize = 10;
-
 /// Buffer size for the escaped header.
 pub const HEADER_SIZE: usize = 32;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct FrameHeader {
+pub struct Header {
     encoding: Encoding,
     kind: FrameKind,
     flags: [u8; 4],
 }
 
-impl FrameHeader {
-    pub const fn new(encoding: Encoding, kind: FrameKind) -> FrameHeader {
-        FrameHeader {
+impl Header {
+    pub const fn new(encoding: Encoding, kind: FrameKind) -> Header {
+        Header {
             encoding,
             kind,
             flags: [0; 4],
@@ -57,7 +53,7 @@ impl FrameHeader {
     }
 
     pub const fn with_count(&self, count: u32) -> Self {
-        FrameHeader {
+        Header {
             encoding: self.encoding,
             kind: self.kind,
             flags: count.to_le_bytes(),
@@ -65,7 +61,7 @@ impl FrameHeader {
     }
 
     pub const fn with_flags(&self, flags: &[u8; 4]) -> Self {
-        FrameHeader {
+        Header {
             encoding: self.encoding,
             kind: self.kind,
             flags: *flags,
@@ -75,11 +71,11 @@ impl FrameHeader {
     /// Returns unescaped size of the header.
     pub const fn unescaped_size(encoding: Encoding) -> usize {
         match encoding {
-            Encoding::ZBIN => core::mem::size_of::<FrameHeader>() + 2,
-            Encoding::ZBIN32 => core::mem::size_of::<FrameHeader>() + 4,
+            Encoding::ZBIN => core::mem::size_of::<Header>() + 2,
+            Encoding::ZBIN32 => core::mem::size_of::<Header>() + 4,
             // Encoding is stored as a single byte also for ZHEX, thus the
             // subtraction:
-            Encoding::ZHEX => (core::mem::size_of::<FrameHeader>() + 2) * 2 - 1,
+            Encoding::ZHEX => (core::mem::size_of::<Header>() + 2) * 2 - 1,
         }
     }
 
@@ -95,7 +91,7 @@ impl FrameHeader {
         u32::from_le_bytes(self.flags)
     }
 
-    pub fn read<P>(port: &mut P) -> io::Result<FrameHeader>
+    pub fn read<P>(port: &mut P) -> io::Result<Header>
     where
         P: Read,
     {
@@ -111,7 +107,7 @@ impl FrameHeader {
 
         let mut out = array_vec!([u8; HEADER_SIZE]);
 
-        for _ in 0..FrameHeader::unescaped_size(encoding) - 1 {
+        for _ in 0..Header::unescaped_size(encoding) - 1 {
             out.push(read_byte_unescaped(port)?);
         }
 
@@ -128,7 +124,7 @@ impl FrameHeader {
             Err(_) => return Err(ErrorKind::InvalidData.into()),
         };
 
-        let header = FrameHeader::new(encoding, ft).with_flags(&[out[1], out[2], out[3], out[4]]);
+        let header = Header::new(encoding, ft).with_flags(&[out[1], out[2], out[3], out[4]]);
         Ok(header)
     }
 
@@ -184,7 +180,7 @@ impl FrameHeader {
     }
 }
 
-impl fmt::Display for FrameHeader {
+impl fmt::Display for Header {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{:8} {}", self.encoding, self.kind)
     }
@@ -400,7 +396,7 @@ where
             _ => (),
         }
 
-        let frame = match FrameHeader::read(port) {
+        let frame = match Header::read(port) {
             Err(ref err) if err.kind() == ErrorKind::InvalidData => {
                 ZNAK_HEADER.write(port)?;
                 continue;
@@ -468,7 +464,7 @@ where
             _ => (),
         }
 
-        let frame = match FrameHeader::read(port) {
+        let frame = match Header::read(port) {
             Err(ref err) if err.kind() == ErrorKind::InvalidData => {
                 ZNAK_HEADER.write(port)?;
                 continue;
@@ -531,7 +527,7 @@ where
 }
 
 /// Writes a ZDATA
-fn write_zdata<P, F>(port: &mut P, file: &mut F, header: &FrameHeader) -> io::Result<()>
+fn write_zdata<P, F>(port: &mut P, file: &mut F, header: &Header) -> io::Result<()>
 where
     P: Read + Write,
     F: Read + Seek,
@@ -790,8 +786,8 @@ fn escape_array(src: &[u8], dst: &mut [u8]) -> usize {
 #[cfg(test)]
 mod tests {
     use crate::{
-        read_subpacket, read_zpad, write_subpacket, Encoding, FrameHeader, FrameKind, PacketKind,
-        XON, ZDLE, ZPAD,
+        read_subpacket, read_zpad, write_subpacket, Encoding, FrameKind, Header, PacketKind, XON,
+        ZDLE, ZPAD,
     };
 
     #[rstest::rstest]
@@ -802,7 +798,7 @@ mod tests {
         #[case] kind: FrameKind,
         #[case] expected: &[u8],
     ) {
-        let header = FrameHeader::new(encoding, kind).with_flags(&[0; 4]);
+        let header = Header::new(encoding, kind).with_flags(&[0; 4]);
         let mut port = vec![];
         header.write(&mut port).unwrap();
         assert_eq!(port, expected);
@@ -817,7 +813,7 @@ mod tests {
         #[case] flags: &[u8; 4],
         #[case] expected: &[u8],
     ) {
-        let header = FrameHeader::new(encoding, kind).with_flags(flags);
+        let header = Header::new(encoding, kind).with_flags(flags);
         let mut port = vec![];
         header.write(&mut port).unwrap();
         assert_eq!(port, expected);
@@ -837,16 +833,13 @@ mod tests {
     }
 
     #[rstest::rstest]
-    #[case(&[Encoding::ZHEX as u8, b'0', b'1', b'0', b'1', b'0', b'2', b'0', b'3', b'0', b'4', b'a', b'7', b'5', b'2'], &FrameHeader::new(Encoding::ZHEX, FrameKind::ZRINIT).with_flags(&[0x1, 0x2, 0x3, 0x4]))]
-    #[case(&[Encoding::ZBIN as u8, FrameKind::ZRINIT as u8, 0xa, 0xb, 0xc, 0xd, 0xa6, 0xcb], &FrameHeader::new(Encoding::ZBIN, FrameKind::ZRINIT).with_flags(&[0xa, 0xb, 0xc, 0xd]))]
-    #[case(&[Encoding::ZBIN32 as u8, FrameKind::ZRINIT as u8, 0xa, 0xb, 0xc, 0xd, 0x99, 0xe2, 0xae, 0x4a], &FrameHeader::new(Encoding::ZBIN32, FrameKind::ZRINIT).with_flags(&[0xa, 0xb, 0xc, 0xd]))]
-    #[case(&[Encoding::ZBIN as u8, FrameKind::ZRINIT as u8, 0xa, ZDLE, b'l', 0xd, ZDLE, b'm', 0x5e, 0x6f], &FrameHeader::new(Encoding::ZBIN, FrameKind::ZRINIT).with_flags(&[0xa, 0x7f, 0xd, 0xff]))]
-    pub fn test_header_read(#[case] input: &[u8], #[case] expected: &FrameHeader) {
+    #[case(&[Encoding::ZHEX as u8, b'0', b'1', b'0', b'1', b'0', b'2', b'0', b'3', b'0', b'4', b'a', b'7', b'5', b'2'], &Header::new(Encoding::ZHEX, FrameKind::ZRINIT).with_flags(&[0x1, 0x2, 0x3, 0x4]))]
+    #[case(&[Encoding::ZBIN as u8, FrameKind::ZRINIT as u8, 0xa, 0xb, 0xc, 0xd, 0xa6, 0xcb], &Header::new(Encoding::ZBIN, FrameKind::ZRINIT).with_flags(&[0xa, 0xb, 0xc, 0xd]))]
+    #[case(&[Encoding::ZBIN32 as u8, FrameKind::ZRINIT as u8, 0xa, 0xb, 0xc, 0xd, 0x99, 0xe2, 0xae, 0x4a], &Header::new(Encoding::ZBIN32, FrameKind::ZRINIT).with_flags(&[0xa, 0xb, 0xc, 0xd]))]
+    #[case(&[Encoding::ZBIN as u8, FrameKind::ZRINIT as u8, 0xa, ZDLE, b'l', 0xd, ZDLE, b'm', 0x5e, 0x6f], &Header::new(Encoding::ZBIN, FrameKind::ZRINIT).with_flags(&[0xa, 0x7f, 0xd, 0xff]))]
+    pub fn test_header_read(#[case] input: &[u8], #[case] expected: &Header) {
         let input = input.to_vec();
-        assert_eq!(
-            &mut FrameHeader::read(&mut input.as_slice()).unwrap(),
-            expected
-        );
+        assert_eq!(&mut Header::read(&mut input.as_slice()).unwrap(), expected);
     }
 
     #[rstest::rstest]
