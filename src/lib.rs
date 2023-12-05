@@ -7,7 +7,7 @@ use core::convert::TryFrom;
 use crc::{Crc, CRC_16_XMODEM, CRC_32_ISO_HDLC};
 use std::fmt::{self, Display};
 use std::io::{self, ErrorKind, Read, Seek, SeekFrom, Write};
-use tinyvec::{array_vec, ArrayVec, SliceVec};
+use tinyvec::{array_vec, ArrayVec};
 
 pub const CRC16: Crc<u16> = Crc::<u16>::new(&CRC_16_XMODEM);
 pub const CRC32: Crc<u32> = Crc::<u32>::new(&CRC_32_ISO_HDLC);
@@ -197,7 +197,7 @@ impl Header {
         }
         let mut escaped = [0u8; HEADER_SIZE];
         // Does not corrupt `ZHEX` as the encoding byte is not escaped:
-        let escaped_len = escape_mem(&out[3..], &mut escaped);
+        let escaped_len = escape_mem(&out[3..], &mut escaped[0..HEADER_SIZE]);
         out.truncate(3);
         out.extend_from_slice(&escaped[..escaped_len]);
         if self.encoding == Encoding::ZHEX {
@@ -755,20 +755,26 @@ where
 {
     let kind = kind as u8;
     let mut buf = [0u8; SUBPACKET_SIZE * 2];
-    let mut len = escape_mem(data, &mut buf);
+    let mut len = escape_mem(data, &mut buf[0..SUBPACKET_SIZE * 2]);
     port.write_all(&buf[..len])?;
     match encoding {
         Encoding::ZBIN32 => {
             let mut digest = CRC32.digest();
             digest.update(data);
             digest.update(&[kind]);
-            len = escape_mem(&digest.finalize().to_le_bytes(), &mut buf)
+            len = escape_mem(
+                &digest.finalize().to_le_bytes(),
+                &mut buf[0..SUBPACKET_SIZE * 2],
+            )
         }
         Encoding::ZBIN => {
             let mut digest = CRC16.digest();
             digest.update(data);
             digest.update(&[kind]);
-            len = escape_mem(&digest.finalize().to_be_bytes(), &mut buf)
+            len = escape_mem(
+                &digest.finalize().to_be_bytes(),
+                &mut buf[0..SUBPACKET_SIZE * 2],
+            )
         }
         Encoding::ZHEX => {
             unimplemented!()
@@ -827,15 +833,17 @@ where
 }
 
 fn escape_mem(src: &[u8], dst: &mut [u8]) -> usize {
-    let mut dst = SliceVec::from_slice_len(dst, 0);
-    for value in src {
-        let escaped = ZDLE_TABLE[*value as usize];
-        if escaped != *value {
-            dst.push(ZDLE);
+    let mut i = 0;
+    for b in src {
+        let b_e = ZDLE_TABLE[*b as usize];
+        if b_e != *b {
+            dst[i] = ZDLE;
+            i += 1;
         }
-        dst.push(escaped);
+        dst[i] = b_e;
+        i += 1;
     }
-    dst.len()
+    i
 }
 
 #[cfg(test)]
