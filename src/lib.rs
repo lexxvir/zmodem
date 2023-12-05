@@ -149,14 +149,18 @@ impl Header {
         P: Read + Write,
     {
         let mut rx_buf = RxBuffer::new();
+        let result = read_subpacket(port, self.encoding(), &mut rx_buf);
 
-        match read_subpacket(port, self.encoding(), &mut rx_buf).map(|_| ()) {
-            Err(ref err) if err.kind() == ErrorKind::InvalidData => ZNAK_HEADER.write(port),
-            Err(err) => Err(err),
-            _ => ZRPOS_HEADER.with_count(0).write(port),
-        }?;
-
-        Ok(())
+        match result {
+            Ok(_zcrc) => ZRPOS_HEADER.with_count(0).write(port),
+            Err(err) => {
+                if err.kind() == ErrorKind::InvalidData {
+                    ZNAK_HEADER.write(port)
+                } else {
+                    ZRPOS_HEADER.with_count(0).write(port)
+                }
+            }
+        }
     }
 
     pub fn write<P>(&self, port: &mut P) -> io::Result<()>
