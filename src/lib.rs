@@ -25,10 +25,14 @@ pub const ZRQINIT_HEADER: Header = Header::new(Encoding::ZHEX, FrameKind::ZRQINI
 
 pub const SUBPACKET_SIZE: usize = 1024;
 pub const SUBPACKET_PER_ACK: usize = 10;
-/// Buffer size for the escaped header.
+/// Buffer size with enough capacity for an escaped header.
 pub const HEADER_SIZE: usize = 32;
 
+/// Receive buffer
 type RxBuffer = ArrayVec<[u8; 2048]>;
+/// Transmit buffer. The size is picked based on maximum subpacket size in the
+/// original 1988 ZMODEM specification.
+type TxBuffer = ArrayVec<[u8; 1024]>;
 
 /// https://play.rust-lang.org/?version=stable&mode=debug&edition=2021&gist=20db24d9f0aaff4d13f0144416f34d46
 const ZDLE_TABLE: [u8; 0x100] = [
@@ -117,23 +121,26 @@ impl Header {
         .write(port)
     }
 
-    pub fn write_zfile<P>(port: &mut P, zfile: &Zfile) -> io::Result<()>
+    pub fn write_zfile<P>(port: &mut P, name: &str, size: u32) -> io::Result<()>
     where
         P: Write,
     {
-        let mut buf = array_vec!([u8; SUBPACKET_SIZE]);
+        let mut tx_buf = TxBuffer::new();
 
-        buf.extend_from_slice(zfile.name.as_bytes());
-        buf.push(b'\0');
-        buf.extend_from_slice(zfile.size.to_string().as_bytes());
-        buf.push(b'\0');
+        tx_buf.truncate(0);
+        tx_buf.extend_from_slice(name.as_bytes());
+        tx_buf.push(b'\0');
+        tx_buf.extend_from_slice(size.to_string().as_bytes());
+        tx_buf.push(b'\0');
+
         Self {
             encoding: Encoding::ZBIN32,
             kind: FrameKind::ZFILE,
             flags: [0; 4],
         }
         .write(port)?;
-        write_subpacket(port, Encoding::ZBIN32, PacketKind::ZCRCW, &buf)
+
+        write_subpacket(port, Encoding::ZBIN32, PacketKind::ZCRCW, &tx_buf)
     }
 
     pub fn write<P>(&self, port: &mut P) -> io::Result<()>
@@ -378,11 +385,6 @@ bitflags! {
     }
 }
 
-pub struct Zfile<'a> {
-    name: &'a str,
-    size: u32,
-}
-
 #[repr(u8)]
 #[allow(clippy::upper_case_acronyms)]
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -456,7 +458,7 @@ where
             FrameKind::ZRINIT => match stage {
                 Stage::Waiting => {
                     let size = size.unwrap_or(0);
-                    Header::write_zfile(port, &Zfile { name, size })?;
+                    Header::write_zfile(port, name, size)?;
                     stage = Stage::Ready;
                 }
                 Stage::Ready => (),
