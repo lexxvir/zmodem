@@ -6,7 +6,7 @@ use bitflags::bitflags;
 use core::convert::TryFrom;
 use crc::{Crc, CRC_16_XMODEM, CRC_32_ISO_HDLC};
 use std::fmt::{self, Display};
-use std::io::{self, ErrorKind, Read, Seek, SeekFrom, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use tinyvec::{array_vec, ArrayVec};
 
 const CRC16: Crc<u16> = Crc::<u16>::new(&CRC_16_XMODEM);
@@ -109,7 +109,7 @@ impl Header {
         encoding: Encoding,
         zrinit: Zrinit,
         count: u16,
-    ) -> io::Result<()>
+    ) -> core::result::Result<(), InvalidData>
     where
         P: Write,
     {
@@ -120,9 +120,14 @@ impl Header {
             flags: [count[0], count[1], 0, zrinit.bits()],
         }
         .write(port)
+        .or(Err(InvalidData))
     }
 
-    pub fn write_zfile<P>(port: &mut P, name: &str, size: u32) -> io::Result<()>
+    pub fn write_zfile<P>(
+        port: &mut P,
+        name: &str,
+        size: u32,
+    ) -> core::result::Result<(), InvalidData>
     where
         P: Write,
     {
@@ -145,7 +150,7 @@ impl Header {
         write_subpacket(port, Encoding::ZBIN32, Packet::ZCRCW, &tx_buf)
     }
 
-    pub fn read_zfile<P>(&self, port: &mut P) -> io::Result<Option<File>>
+    pub fn read_zfile<P>(&self, port: &mut P) -> core::result::Result<Option<File>, InvalidData>
     where
         P: Read + Write,
     {
@@ -154,11 +159,9 @@ impl Header {
         match result {
             Ok(_) => {
                 ZRPOS_HEADER.with_count(0).write(port)?;
-                let reader: ZfileReader = Cursor::new(rx_buf)
-                    .read_ne()
-                    .or::<io::Error>(Err(ErrorKind::InvalidData.into()))?;
+                let reader: ZfileReader = Cursor::new(rx_buf).read_ne().or(Err(InvalidData))?;
                 if reader.file_name.len() > 255 {
-                    return Err(ErrorKind::InvalidData.into());
+                    return Err(InvalidData);
                 }
                 let mut name = [0; 256];
                 for (i, b) in reader.file_name.as_slice().iter().enumerate() {
@@ -166,17 +169,11 @@ impl Header {
                 }
                 Ok(Some(File { name }))
             }
-            Err(err) => {
-                if err.kind() == ErrorKind::InvalidData {
-                    ZNAK_HEADER.write(port).and(Ok(None))
-                } else {
-                    ZRPOS_HEADER.with_count(0).write(port).and(Ok(None))
-                }
-            }
+            _ => ZNAK_HEADER.write(port).and(Ok(None)),
         }
     }
 
-    pub fn write<P>(&self, port: &mut P) -> io::Result<()>
+    pub fn write<P>(&self, port: &mut P) -> core::result::Result<(), InvalidData>
     where
         P: Write,
     {
@@ -216,25 +213,24 @@ impl Header {
                 out.push(XON);
             }
         }
-        port.write_all(&out)
+        port.write_all(&out).or(Err(InvalidData))
     }
 
-    pub fn read<P>(port: &mut P) -> io::Result<Header>
+    pub fn read<P>(port: &mut P) -> core::result::Result<Header, InvalidData>
     where
         P: Read,
     {
-        let encoding = Encoding::try_from(read_byte(port)?)
-            .or::<io::Error>(Err(ErrorKind::InvalidData.into()))?;
+        let encoding = Encoding::try_from(read_byte(port)?)?;
         let mut out = array_vec!([u8; HEADER_SIZE]);
         for _ in 0..Header::unescaped_size(encoding) - 1 {
             out.push(read_byte_unescaped(port)?);
         }
         if encoding == Encoding::ZHEX {
-            hex::decode_in_slice(&mut out).or::<io::Error>(Err(ErrorKind::InvalidData.into()))?;
+            hex::decode_in_slice(&mut out).or(Err(InvalidData))?;
             out.truncate(out.len() / 2);
         }
         check_crc(&out[..5], &out[5..], encoding)?;
-        let kind = Frame::try_from(out[0]).or::<io::Error>(Err(ErrorKind::InvalidData.into()))?;
+        let kind = Frame::try_from(out[0])?;
         let mut header = Header::new(encoding, kind);
         header.flags.copy_from_slice(&out[1..=4]);
         Ok(header)
@@ -285,17 +281,14 @@ pub enum Encoding {
 
 const ENCODINGS: &[Encoding] = &[Encoding::ZBIN, Encoding::ZHEX, Encoding::ZBIN32];
 
-#[derive(Clone, Copy, Debug)]
-pub struct InvalidEncoding;
-
 impl TryFrom<u8> for Encoding {
-    type Error = InvalidEncoding;
+    type Error = InvalidData;
 
     fn try_from(value: u8) -> Result<Self, Self::Error> {
         ENCODINGS
             .iter()
             .find(|e| value == **e as u8)
-            .map_or(Err(InvalidEncoding), |e| Ok(*e))
+            .map_or(Err(InvalidData), |e| Ok(*e))
     }
 }
 
@@ -375,17 +368,17 @@ const FRAMES: &[Frame] = &[
     Frame::ZSTDERR,
 ];
 
-#[derive(Clone, Copy, Debug)]
-pub struct InvalidFrame;
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct InvalidData;
 
 impl TryFrom<u8> for Frame {
-    type Error = InvalidFrame;
+    type Error = InvalidData;
 
     fn try_from(value: u8) -> Result<Self, Self::Error> {
         FRAMES
             .iter()
             .find(|t| value == **t as u8)
-            .map_or(Err(InvalidFrame), |t| Ok(*t))
+            .map_or(Err(InvalidData), |t| Ok(*t))
     }
 }
 
@@ -435,17 +428,14 @@ pub enum Packet {
 
 const PACKETS: &[Packet] = &[Packet::ZCRCE, Packet::ZCRCG, Packet::ZCRCQ, Packet::ZCRCW];
 
-#[derive(Clone, Copy, Debug)]
-pub struct InvalidPacket;
-
 impl TryFrom<u8> for Packet {
-    type Error = InvalidPacket;
+    type Error = InvalidData;
 
     fn try_from(value: u8) -> Result<Self, Self::Error> {
         PACKETS
             .iter()
             .find(|e| value == **e as u8)
-            .map_or(Err(InvalidPacket), |e| Ok(*e))
+            .map_or(Err(InvalidData), |e| Ok(*e))
     }
 }
 
@@ -469,7 +459,12 @@ enum Stage {
 }
 
 /// Sends a file using the ZMODEM file transfer protocol.
-pub fn write<P, F>(port: &mut P, file: &mut F, name: &str, size: Option<u32>) -> io::Result<()>
+pub fn write<P, F>(
+    port: &mut P,
+    file: &mut F,
+    name: &str,
+    size: Option<u32>,
+) -> core::result::Result<(), InvalidData>
 where
     P: Read + Write,
     F: Read + Seek,
@@ -478,21 +473,16 @@ where
 
     ZRQINIT_HEADER.write(port)?;
     loop {
-        match read_zpad(port) {
-            Err(ref err) if err.kind() == ErrorKind::InvalidData => continue,
-            Err(err) => return Err(err),
-            _ => (),
+        if read_zpad(port).is_err() {
+            continue;
         }
-
         let frame = match Header::read(port) {
-            Err(ref err) if err.kind() == ErrorKind::InvalidData => {
+            Err(_) => {
                 ZNAK_HEADER.write(port)?;
                 continue;
             }
-            Err(err) => return Err(err),
             Ok(frame) => frame,
         };
-
         match frame.kind() {
             Frame::ZRINIT => match stage {
                 Stage::Waiting => {
@@ -515,7 +505,7 @@ where
                 if stage == Stage::Waiting {
                     ZRQINIT_HEADER.write(port)?;
                 } else {
-                    port.write_all("OO".as_bytes())?;
+                    port.write_all("OO".as_bytes()).or(Err(InvalidData))?;
                     break;
                 }
             }
@@ -526,7 +516,11 @@ where
 }
 
 /// Receives a file using the ZMODEM file transfer protocol.
-pub fn read<P, F>(port: &mut P, state: &mut (Option<File>, u32), out: &mut F) -> io::Result<()>
+pub fn read<P, F>(
+    port: &mut P,
+    state: &mut (Option<File>, u32),
+    out: &mut F,
+) -> core::result::Result<(), InvalidData>
 where
     P: Read + Write,
     F: Write,
@@ -538,21 +532,18 @@ where
             Encoding::ZHEX,
             Zrinit::CANCRY | Zrinit::CANOVIO | Zrinit::CANFC32,
             0,
-        )?;
+        )?
     }
 
     loop {
-        match read_zpad(port) {
-            Err(ref err) if err.kind() == ErrorKind::InvalidData => continue,
-            Err(err) => return Err(err),
-            _ => (),
+        if read_zpad(port).is_err() {
+            continue;
         }
         let frame = match Header::read(port) {
-            Err(ref err) if err.kind() == ErrorKind::InvalidData => {
+            Err(_) => {
                 ZNAK_HEADER.write(port)?;
                 continue;
             }
-            Err(err) => return Err(err),
             Ok(frame) => frame,
         };
         match frame.kind() {
@@ -569,7 +560,7 @@ where
                         Encoding::ZHEX,
                         Zrinit::CANCRY | Zrinit::CANOVIO | Zrinit::CANFC32,
                         0,
-                    )?
+                    )?;
                 } else if frame.count() != state.1 {
                     ZRPOS_HEADER.with_count(state.1).write(port)?
                 } else {
@@ -596,14 +587,12 @@ where
                 ZFIN_HEADER.write(port)?;
                 break;
             }
-            _ if state.0.is_none() => {
-                Header::write_zrinit(
-                    port,
-                    Encoding::ZHEX,
-                    Zrinit::CANCRY | Zrinit::CANOVIO | Zrinit::CANFC32,
-                    0,
-                )?;
-            }
+            _ if state.0.is_none() => Header::write_zrinit(
+                port,
+                Encoding::ZHEX,
+                Zrinit::CANCRY | Zrinit::CANOVIO | Zrinit::CANFC32,
+                0,
+            )?,
             _ => (),
         }
     }
@@ -612,7 +601,11 @@ where
 }
 
 /// Writes a ZDATA
-fn write_zdata<P, F>(port: &mut P, file: &mut F, header: &Header) -> io::Result<()>
+fn write_zdata<P, F>(
+    port: &mut P,
+    file: &mut F,
+    header: &Header,
+) -> core::result::Result<(), InvalidData>
 where
     P: Read + Write,
     F: Read + Seek,
@@ -620,9 +613,10 @@ where
     let mut data = [0; SUBPACKET_SIZE];
     let mut offset: u32 = header.count();
 
-    file.seek(SeekFrom::Start(offset as u64))?;
+    file.seek(SeekFrom::Start(offset as u64))
+        .or(Err(InvalidData))?;
 
-    let mut count = file.read(&mut data)?;
+    let mut count = file.read(&mut data).or(Err(InvalidData))?;
     if count == 0 {
         ZEOF_HEADER.with_count(offset).write(port)?;
         return Ok(());
@@ -633,18 +627,23 @@ where
         write_subpacket(port, Encoding::ZBIN32, Packet::ZCRCG, &data[..count])?;
         offset += count as u32;
 
-        count = file.read(&mut data)?;
+        count = file.read(&mut data).or(Err(InvalidData))?;
         if count < SUBPACKET_SIZE {
             break;
         }
     }
-    write_subpacket(port, Encoding::ZBIN32, Packet::ZCRCW, &data[..count])?;
 
+    write_subpacket(port, Encoding::ZBIN32, Packet::ZCRCW, &data[..count])?;
     Ok(())
 }
 
 /// Reads a ZDATA packet
-fn read_zdata<P, F>(encoding: u8, count: &mut u32, port: &mut P, file: &mut F) -> io::Result<()>
+fn read_zdata<P, F>(
+    encoding: u8,
+    count: &mut u32,
+    port: &mut P,
+    file: &mut F,
+) -> core::result::Result<(), InvalidData>
 where
     P: Write + Read,
     F: Write,
@@ -653,17 +652,15 @@ where
 
     loop {
         buf.clear();
-        let encoding =
-            Encoding::try_from(encoding).or::<io::Error>(Err(ErrorKind::InvalidData.into()))?;
+        let encoding = Encoding::try_from(encoding)?;
         let zcrc = match read_subpacket(port, encoding, &mut buf) {
-            Err(ref err) if err.kind() == ErrorKind::InvalidData => {
+            Err(_) => {
                 ZRPOS_HEADER.with_count(*count).write(port)?;
-                return Err(ErrorKind::InvalidData.into());
+                return Ok(());
             }
-            Err(err) => return Err(err),
             Ok(zcrc) => zcrc,
         };
-        file.write_all(&buf)?;
+        file.write_all(&buf).or(Err(InvalidData))?;
         *count += buf.len() as u32;
         match zcrc {
             Packet::ZCRCW => {
@@ -680,12 +677,12 @@ where
 }
 
 /// Skips (ZPAD, [ZPAD,] ZDLE) sequence.
-fn read_zpad<P>(port: &mut P) -> io::Result<()>
+fn read_zpad<P>(port: &mut P) -> core::result::Result<(), InvalidData>
 where
     P: Read,
 {
     if read_byte(port)? != ZPAD {
-        return Err(ErrorKind::InvalidData.into());
+        return Err(InvalidData);
     }
 
     let mut b = read_byte(port)?;
@@ -697,11 +694,15 @@ where
         return Ok(());
     }
 
-    Err(ErrorKind::InvalidData.into())
+    Err(InvalidData)
 }
 
 /// Reads and unescapes a ZMODEM protocol subpacket
-fn read_subpacket<P>(port: &mut P, encoding: Encoding, buf: &mut RxBuffer) -> io::Result<Packet>
+fn read_subpacket<P>(
+    port: &mut P,
+    encoding: Encoding,
+    buf: &mut RxBuffer,
+) -> core::result::Result<Packet, InvalidData>
 where
     P: Read,
 {
@@ -735,14 +736,19 @@ where
     Ok(result)
 }
 
-fn write_subpacket<P>(port: &mut P, encoding: Encoding, kind: Packet, data: &[u8]) -> io::Result<()>
+fn write_subpacket<P>(
+    port: &mut P,
+    encoding: Encoding,
+    kind: Packet,
+    data: &[u8],
+) -> core::result::Result<(), InvalidData>
 where
     P: Write,
 {
     let kind = kind as u8;
     let mut buf = [0u8; SUBPACKET_SIZE * 2];
     let mut len = escape_mem(data, &mut buf[0..SUBPACKET_SIZE * 2]);
-    port.write_all(&buf[..len])?;
+    port.write_all(&buf[..len]).or(Err(InvalidData))?;
     match encoding {
         Encoding::ZBIN32 => {
             let mut digest = CRC32.digest();
@@ -766,18 +772,18 @@ where
             unimplemented!()
         }
     };
-    port.write_all(&[ZDLE, kind])?;
-    port.write_all(&buf[..len])?;
+    port.write_all(&[ZDLE, kind]).or(Err(InvalidData))?;
+    port.write_all(&buf[..len]).or(Err(InvalidData))?;
     Ok(())
 }
 
-fn check_crc(data: &[u8], crc: &[u8], encoding: Encoding) -> io::Result<()> {
+fn check_crc(data: &[u8], crc: &[u8], encoding: Encoding) -> core::result::Result<(), InvalidData> {
     let mut crc2 = [0u8; 4];
     let crc2_len = make_crc(data, &mut crc2, encoding);
 
     if *crc != crc2[..crc2_len] {
         log::error!("ZCRC mismatch: {:?} != {:?}", crc, &crc2[..crc2_len]);
-        return Err(ErrorKind::InvalidData.into());
+        return Err(InvalidData);
     }
 
     Ok(())
@@ -798,9 +804,9 @@ fn make_crc(data: &[u8], out: &mut [u8], encoding: Encoding) -> usize {
     }
 }
 
-fn read_byte_unescaped<P>(port: &mut P) -> io::Result<u8>
+fn read_byte_unescaped<P>(port: &mut P) -> core::result::Result<u8, InvalidData>
 where
-    P: io::Read,
+    P: Read,
 {
     let b = read_byte(port)?;
     Ok(if b == ZDLE {
@@ -810,12 +816,14 @@ where
     })
 }
 
-fn read_byte<P>(port: &mut P) -> io::Result<u8>
+fn read_byte<P>(port: &mut P) -> core::result::Result<u8, InvalidData>
 where
-    P: io::Read,
+    P: Read,
 {
     let mut buf = [0; 1];
-    port.read_exact(&mut buf).map(|_| buf[0])
+    port.read_exact(&mut buf)
+        .map(|_| buf[0])
+        .or(Err(InvalidData))
 }
 
 fn escape_mem(src: &[u8], dst: &mut [u8]) -> usize {
@@ -835,8 +843,8 @@ fn escape_mem(src: &[u8], dst: &mut [u8]) -> usize {
 #[cfg(test)]
 mod tests {
     use crate::{
-        read_subpacket, read_zpad, write_subpacket, Encoding, Frame, Header, Packet, RxBuffer, XON,
-        ZDLE, ZPAD,
+        read_subpacket, read_zpad, write_subpacket, Encoding, Frame, Header, InvalidData, Packet,
+        RxBuffer, XON, ZDLE, ZPAD,
     };
 
     #[rstest::rstest]
@@ -867,15 +875,18 @@ mod tests {
     #[rstest::rstest]
     #[case(&[ZPAD, ZDLE], Ok(()))]
     #[case(&[ZPAD, ZPAD, ZDLE], Ok(()))]
-    #[case(&[ZDLE], Err(std::io::ErrorKind::InvalidData.into()))]
-    #[case(&[ZPAD, XON], Err(std::io::ErrorKind::InvalidData.into()))]
-    #[case(&[ZPAD, ZPAD, XON], Err(std::io::ErrorKind::InvalidData.into()))]
-    #[case(&[], Err(std::io::ErrorKind::UnexpectedEof.into()))]
-    #[case(&[0; 100], Err(std::io::ErrorKind::InvalidData.into()))]
-    pub fn test_read_zpad(#[case] port: &[u8], #[case] expected: std::io::Result<()>) {
+    #[case(&[ZDLE], Err(InvalidData))]
+    #[case(&[ZPAD, XON], Err(InvalidData))]
+    #[case(&[ZPAD, ZPAD, XON], Err(InvalidData))]
+    #[case(&[], Err(InvalidData))]
+    #[case(&[0; 100], Err(InvalidData))]
+    pub fn test_read_zpad(
+        #[case] port: &[u8],
+        #[case] expected: core::result::Result<(), InvalidData>,
+    ) {
         let result = read_zpad(&mut port.to_vec().as_slice());
         if result.is_err() {
-            assert_eq!(result.unwrap_err().kind(), expected.unwrap_err().kind());
+            assert_eq!(result.unwrap_err(), expected.unwrap_err());
         }
     }
 
