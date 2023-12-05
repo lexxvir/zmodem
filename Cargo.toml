@@ -9,15 +9,19 @@ rust-version = "1.73"
 [dependencies]
 binread = "2.2.0"
 bitflags = "2.4.1"
-clap = "2.21.1"
 crc = "3.0.1"
-embedded-io = "0.6.1"
 hex = { git = "https://github.com/jarkkojs/rust-hex.git", branch="feat/decode-in-slice" }
 log = "0.4.20"
-rstest = "0.18.2"
 tinyvec = "1.6.0"
 
 [dev-dependencies]
+clap = "2.21.1"
 lazy_static = "1"
 rand = "0.3.15"
-mockall = "0.11.4"
+rstest = "0.18.2"
+
+[[example]]
+name = "rzm"
+
+[[example]]
+name = "szm"
