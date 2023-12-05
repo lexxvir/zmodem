@@ -142,7 +142,7 @@ impl Header {
         }
         .write(port)?;
 
-        write_subpacket(port, Encoding::ZBIN32, PacketKind::ZCRCW, &tx_buf)
+        write_subpacket(port, Encoding::ZBIN32, Packet::ZCRCW, &tx_buf)
     }
 
     pub fn read_zfile<P>(&self, port: &mut P) -> io::Result<Option<File>>
@@ -426,35 +426,30 @@ pub struct File {
 #[allow(clippy::upper_case_acronyms)]
 #[derive(Clone, Copy, Debug, PartialEq)]
 /// The ZMODEM subpacket type
-pub enum PacketKind {
+pub enum Packet {
     ZCRCE = 0x68,
     ZCRCG = 0x69,
     ZCRCQ = 0x6a,
     ZCRCW = 0x6b,
 }
 
-const PACKETS: &[PacketKind] = &[
-    PacketKind::ZCRCE,
-    PacketKind::ZCRCG,
-    PacketKind::ZCRCQ,
-    PacketKind::ZCRCW,
-];
+const PACKETS: &[Packet] = &[Packet::ZCRCE, Packet::ZCRCG, Packet::ZCRCQ, Packet::ZCRCW];
 
 #[derive(Clone, Copy, Debug)]
-pub struct InvalidPacketKind;
+pub struct InvalidPacket;
 
-impl TryFrom<u8> for PacketKind {
-    type Error = InvalidPacketKind;
+impl TryFrom<u8> for Packet {
+    type Error = InvalidPacket;
 
     fn try_from(value: u8) -> Result<Self, Self::Error> {
         PACKETS
             .iter()
             .find(|e| value == **e as u8)
-            .map_or(Err(InvalidPacketKind), |e| Ok(*e))
+            .map_or(Err(InvalidPacket), |e| Ok(*e))
     }
 }
 
-impl Display for PacketKind {
+impl Display for Packet {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{:#02x}", *self as u8)
     }
@@ -635,7 +630,7 @@ where
 
     ZDATA_HEADER.with_count(offset).write(port)?;
     for _ in 1..SUBPACKET_PER_ACK {
-        write_subpacket(port, Encoding::ZBIN32, PacketKind::ZCRCG, &data[..count])?;
+        write_subpacket(port, Encoding::ZBIN32, Packet::ZCRCG, &data[..count])?;
         offset += count as u32;
 
         count = file.read(&mut data)?;
@@ -643,7 +638,7 @@ where
             break;
         }
     }
-    write_subpacket(port, Encoding::ZBIN32, PacketKind::ZCRCW, &data[..count])?;
+    write_subpacket(port, Encoding::ZBIN32, Packet::ZCRCW, &data[..count])?;
 
     Ok(())
 }
@@ -671,15 +666,15 @@ where
         file.write_all(&buf)?;
         *count += buf.len() as u32;
         match zcrc {
-            PacketKind::ZCRCW => {
+            Packet::ZCRCW => {
                 ZACK_HEADER.with_count(*count).write(port)?;
                 return Ok(());
             }
-            PacketKind::ZCRCE => return Ok(()),
-            PacketKind::ZCRCQ => {
+            Packet::ZCRCE => return Ok(()),
+            Packet::ZCRCQ => {
                 ZACK_HEADER.with_count(*count).write(port)?;
             }
-            PacketKind::ZCRCG => log::debug!("ZCRCG"),
+            Packet::ZCRCG => log::debug!("ZCRCG"),
         }
     }
 }
@@ -706,7 +701,7 @@ where
 }
 
 /// Reads and unescapes a ZMODEM protocol subpacket
-fn read_subpacket<P>(port: &mut P, encoding: Encoding, buf: &mut RxBuffer) -> io::Result<PacketKind>
+fn read_subpacket<P>(port: &mut P, encoding: Encoding, buf: &mut RxBuffer) -> io::Result<Packet>
 where
     P: Read,
 {
@@ -716,7 +711,7 @@ where
         let byte = read_byte(port)?;
         if byte == ZDLE {
             let byte = read_byte(port)?;
-            if let Ok(kind) = PacketKind::try_from(byte) {
+            if let Ok(kind) = Packet::try_from(byte) {
                 buf.push(kind as u8);
                 result = kind;
                 break;
@@ -740,12 +735,7 @@ where
     Ok(result)
 }
 
-fn write_subpacket<P>(
-    port: &mut P,
-    encoding: Encoding,
-    kind: PacketKind,
-    data: &[u8],
-) -> io::Result<()>
+fn write_subpacket<P>(port: &mut P, encoding: Encoding, kind: Packet, data: &[u8]) -> io::Result<()>
 where
     P: Write,
 {
@@ -845,8 +835,8 @@ fn escape_mem(src: &[u8], dst: &mut [u8]) -> usize {
 #[cfg(test)]
 mod tests {
     use crate::{
-        read_subpacket, read_zpad, write_subpacket, Encoding, Frame, Header, PacketKind, RxBuffer,
-        XON, ZDLE, ZPAD,
+        read_subpacket, read_zpad, write_subpacket, Encoding, Frame, Header, Packet, RxBuffer, XON,
+        ZDLE, ZPAD,
     };
 
     #[rstest::rstest]
@@ -900,12 +890,12 @@ mod tests {
     }
 
     #[rstest::rstest]
-    #[case(Encoding::ZBIN, PacketKind::ZCRCE, &[])]
-    #[case(Encoding::ZBIN, PacketKind::ZCRCW, &[0x00])]
-    #[case(Encoding::ZBIN32, PacketKind::ZCRCQ, &[0, 1, 2, 3, 4, 0x60, 0x60])]
+    #[case(Encoding::ZBIN, Packet::ZCRCE, &[])]
+    #[case(Encoding::ZBIN, Packet::ZCRCW, &[0x00])]
+    #[case(Encoding::ZBIN32, Packet::ZCRCQ, &[0, 1, 2, 3, 4, 0x60, 0x60])]
     pub fn test_write_read_subpacket(
         #[case] encoding: Encoding,
-        #[case] kind: PacketKind,
+        #[case] kind: Packet,
         #[case] data: &[u8],
     ) {
         let mut port = vec![];
