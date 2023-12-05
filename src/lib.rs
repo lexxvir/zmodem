@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //! ZMODEM file transfer protocol
 
+use binread::{io::Cursor, BinRead, BinReaderExt, NullString};
 use bitflags::bitflags;
 use core::convert::TryFrom;
 use crc::{Crc, CRC_16_XMODEM, CRC_32_ISO_HDLC};
@@ -144,7 +145,7 @@ impl Header {
     }
 
     // TODO: Read file's name and size.
-    pub fn read_zfile<P>(&self, port: &mut P) -> io::Result<()>
+    pub fn read_zfile<P>(&self, port: &mut P) -> io::Result<Option<RxBuffer>>
     where
         P: Read + Write,
     {
@@ -152,12 +153,15 @@ impl Header {
         let result = read_subpacket(port, self.encoding(), &mut rx_buf);
 
         match result {
-            Ok(_zcrc) => ZRPOS_HEADER.with_count(0).write(port),
+            Ok(_) => {
+                ZRPOS_HEADER.with_count(0).write(port)?;
+                Ok(Some(rx_buf))
+            }
             Err(err) => {
                 if err.kind() == ErrorKind::InvalidData {
-                    ZNAK_HEADER.write(port)
+                    ZNAK_HEADER.write(port).and(Ok(None))
                 } else {
-                    ZRPOS_HEADER.with_count(0).write(port)
+                    ZRPOS_HEADER.with_count(0).write(port).and(Ok(None))
                 }
             }
         }
@@ -405,6 +409,14 @@ bitflags! {
     }
 }
 
+/// `ZFILE` payload
+#[derive(BinRead)]
+#[br(assert(file_name.len() != 0))]
+pub struct Zfile {
+    file_name: NullString,
+    file_attributes: NullString,
+}
+
 #[repr(u8)]
 #[allow(clippy::upper_case_acronyms)]
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -539,7 +551,17 @@ where
             FrameKind::ZFILE => {
                 if stage != Stage::Receiving {
                     assert_eq!(count, 0);
-                    frame.read_zfile(port)?;
+                    if let Some(rx_buf) = frame.read_zfile(port)? {
+                        let mut rx = Cursor::new(&rx_buf);
+                        let zfile: Zfile = rx
+                            .read_ne()
+                            .or::<io::Error>(Err(ErrorKind::InvalidData.into()))?;
+                        eprintln!(
+                            "ZFILE {:?} {:?}",
+                            zfile.file_name.to_string(),
+                            zfile.file_attributes.to_string(),
+                        );
+                    }
                     stage = Stage::Ready
                 }
             }
