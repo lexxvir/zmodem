@@ -143,6 +143,22 @@ impl Header {
         write_subpacket(port, Encoding::ZBIN32, PacketKind::ZCRCW, &tx_buf)
     }
 
+    // TODO: Read file's name and size.
+    pub fn read_zfile<P>(&self, port: &mut P) -> io::Result<()>
+    where
+        P: Read + Write,
+    {
+        let mut rx_buf = RxBuffer::new();
+
+        match read_subpacket(port, self.encoding(), &mut rx_buf).map(|_| ()) {
+            Err(ref err) if err.kind() == ErrorKind::InvalidData => ZNAK_HEADER.write(port),
+            Err(err) => Err(err),
+            _ => ZRPOS_HEADER.with_count(0).write(port),
+        }?;
+
+        Ok(())
+    }
+
     pub fn write<P>(&self, port: &mut P) -> io::Result<()>
     where
         P: Write,
@@ -516,37 +532,30 @@ where
             Ok(frame) => frame,
         };
         match frame.kind() {
-            FrameKind::ZFILE => match stage {
-                Stage::Waiting | Stage::Ready => {
+            FrameKind::ZFILE => {
+                if stage != Stage::Receiving {
                     assert_eq!(count, 0);
-                    let mut buf = RxBuffer::new();
-                    match read_subpacket(port, frame.encoding(), &mut buf).map(|_| ()) {
-                        Err(ref err) if err.kind() == ErrorKind::InvalidData => {
-                            ZNAK_HEADER.write(port)
-                        }
-                        Err(err) => Err(err),
-                        _ => ZRPOS_HEADER.with_count(0).write(port),
-                    }?;
-                    stage = Stage::Ready;
+                    frame.read_zfile(port)?;
+                    stage = Stage::Ready
                 }
-                Stage::Receiving => (),
-            },
-            FrameKind::ZDATA => match stage {
-                Stage::Ready | Stage::Receiving => {
+            }
+            FrameKind::ZDATA => {
+                if stage == Stage::Waiting {
+                    Header::write_zrinit(
+                        port,
+                        Encoding::ZHEX,
+                        Zrinit::CANCRY | Zrinit::CANOVIO | Zrinit::CANFC32,
+                        0,
+                    )?
+                } else {
                     if frame.count() != count {
                         ZRPOS_HEADER.with_count(count).write(port)?
                     } else {
                         read_zdata(frame.encoding() as u8, &mut count, port, file)?;
                     }
-                    stage = Stage::Receiving;
+                    stage = Stage::Receiving
                 }
-                Stage::Waiting => Header::write_zrinit(
-                    port,
-                    Encoding::ZHEX,
-                    Zrinit::CANCRY | Zrinit::CANOVIO | Zrinit::CANFC32,
-                    0,
-                )?,
-            },
+            }
             FrameKind::ZEOF if stage == Stage::Receiving => {
                 if frame.count() != count {
                     log::error!(
