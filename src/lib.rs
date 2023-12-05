@@ -531,20 +531,20 @@ where
 }
 
 /// Receives a file using the ZMODEM file transfer protocol.
-pub fn read<P, F>(port: &mut P, out: &mut F) -> io::Result<(Option<File>, usize)>
+pub fn read<P, F>(port: &mut P, state: &mut (Option<File>, u32), out: &mut F) -> io::Result<()>
 where
     P: Read + Write,
     F: Write,
 {
-    let mut file = None;
-    let mut count = 0;
-
-    Header::write_zrinit(
-        port,
-        Encoding::ZHEX,
-        Zrinit::CANCRY | Zrinit::CANOVIO | Zrinit::CANFC32,
-        0,
-    )?;
+    if state.0.is_none() {
+        assert_eq!(state.1, 0);
+        Header::write_zrinit(
+            port,
+            Encoding::ZHEX,
+            Zrinit::CANCRY | Zrinit::CANOVIO | Zrinit::CANFC32,
+            0,
+        )?;
+    }
 
     loop {
         match read_zpad(port) {
@@ -562,31 +562,31 @@ where
         };
         match frame.kind() {
             Frame::ZFILE => {
-                if file.is_none() || count == 0 {
-                    assert_eq!(count, 0);
-                    file = frame.read_zfile(port)?;
+                if state.0.is_none() || state.1 == 0 {
+                    assert_eq!(state.1, 0);
+                    state.0 = frame.read_zfile(port)?;
                 }
             }
             Frame::ZDATA => {
-                if file.is_none() {
+                if state.0.is_none() {
                     Header::write_zrinit(
                         port,
                         Encoding::ZHEX,
                         Zrinit::CANCRY | Zrinit::CANOVIO | Zrinit::CANFC32,
                         0,
                     )?
-                } else if frame.count() != count {
-                    ZRPOS_HEADER.with_count(count).write(port)?
+                } else if frame.count() != state.1 {
+                    ZRPOS_HEADER.with_count(state.1).write(port)?
                 } else {
-                    read_zdata(frame.encoding() as u8, &mut count, port, out)?;
+                    read_zdata(frame.encoding() as u8, &mut state.1, port, out)?;
                 }
             }
-            Frame::ZEOF if file.is_some() => {
-                if frame.count() != count {
+            Frame::ZEOF if state.0.is_some() => {
+                if frame.count() != state.1 {
                     log::error!(
                         "ZEOF offset mismatch: frame({}) != recv({})",
                         frame.count(),
-                        count
+                        state.1
                     );
                 } else {
                     Header::write_zrinit(
@@ -597,11 +597,11 @@ where
                     )?
                 }
             }
-            Frame::ZFIN if file.is_some() => {
+            Frame::ZFIN if state.0.is_some() => {
                 ZFIN_HEADER.write(port)?;
                 break;
             }
-            _ if file.is_none() => {
+            _ if state.0.is_none() => {
                 Header::write_zrinit(
                     port,
                     Encoding::ZHEX,
@@ -613,7 +613,7 @@ where
         }
     }
 
-    Ok((file, count as usize))
+    Ok(())
 }
 
 /// Writes a ZDATA
