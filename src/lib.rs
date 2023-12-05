@@ -9,25 +9,25 @@ use std::fmt::{self, Display};
 use std::io::{self, ErrorKind, Read, Seek, SeekFrom, Write};
 use tinyvec::{array_vec, ArrayVec};
 
-pub const CRC16: Crc<u16> = Crc::<u16>::new(&CRC_16_XMODEM);
-pub const CRC32: Crc<u32> = Crc::<u32>::new(&CRC_32_ISO_HDLC);
+const CRC16: Crc<u16> = Crc::<u16>::new(&CRC_16_XMODEM);
+const CRC32: Crc<u32> = Crc::<u32>::new(&CRC_32_ISO_HDLC);
 
-pub const ZPAD: u8 = b'*';
-pub const ZDLE: u8 = 0x18;
-pub const XON: u8 = 0x11;
+const ZPAD: u8 = b'*';
+const ZDLE: u8 = 0x18;
+const XON: u8 = 0x11;
 
-pub const ZACK_HEADER: Header = Header::new(Encoding::ZHEX, FrameKind::ZACK);
-pub const ZDATA_HEADER: Header = Header::new(Encoding::ZBIN32, FrameKind::ZDATA);
-pub const ZEOF_HEADER: Header = Header::new(Encoding::ZBIN32, FrameKind::ZEOF);
-pub const ZFIN_HEADER: Header = Header::new(Encoding::ZHEX, FrameKind::ZFIN);
-pub const ZNAK_HEADER: Header = Header::new(Encoding::ZHEX, FrameKind::ZNAK);
-pub const ZRPOS_HEADER: Header = Header::new(Encoding::ZHEX, FrameKind::ZRPOS);
-pub const ZRQINIT_HEADER: Header = Header::new(Encoding::ZHEX, FrameKind::ZRQINIT);
+const ZACK_HEADER: Header = Header::new(Encoding::ZHEX, Frame::ZACK);
+const ZDATA_HEADER: Header = Header::new(Encoding::ZBIN32, Frame::ZDATA);
+const ZEOF_HEADER: Header = Header::new(Encoding::ZBIN32, Frame::ZEOF);
+const ZFIN_HEADER: Header = Header::new(Encoding::ZHEX, Frame::ZFIN);
+const ZNAK_HEADER: Header = Header::new(Encoding::ZHEX, Frame::ZNAK);
+const ZRPOS_HEADER: Header = Header::new(Encoding::ZHEX, Frame::ZRPOS);
+const ZRQINIT_HEADER: Header = Header::new(Encoding::ZHEX, Frame::ZRQINIT);
 
-pub const SUBPACKET_SIZE: usize = 1024;
-pub const SUBPACKET_PER_ACK: usize = 10;
+const SUBPACKET_SIZE: usize = 1024;
+const SUBPACKET_PER_ACK: usize = 10;
 /// Buffer size with enough capacity for an escaped header.
-pub const HEADER_SIZE: usize = 32;
+const HEADER_SIZE: usize = 32;
 
 /// Receive buffer
 type RxBuffer = ArrayVec<[u8; 2048]>;
@@ -79,12 +79,12 @@ pub const UNZDLE_TABLE: [u8; 0x100] = [
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Header {
     encoding: Encoding,
-    kind: FrameKind,
+    kind: Frame,
     flags: [u8; 4],
 }
 
 impl Header {
-    pub const fn new(encoding: Encoding, kind: FrameKind) -> Self {
+    pub const fn new(encoding: Encoding, kind: Frame) -> Self {
         Self {
             encoding,
             kind,
@@ -96,7 +96,7 @@ impl Header {
         self.encoding
     }
 
-    pub const fn kind(&self) -> FrameKind {
+    pub const fn kind(&self) -> Frame {
         self.kind
     }
 
@@ -116,7 +116,7 @@ impl Header {
         let count = count.to_le_bytes();
         Self {
             encoding,
-            kind: FrameKind::ZRINIT,
+            kind: Frame::ZRINIT,
             flags: [count[0], count[1], 0, zrinit.bits()],
         }
         .write(port)
@@ -131,12 +131,13 @@ impl Header {
         tx_buf.truncate(0);
         tx_buf.extend_from_slice(name.as_bytes());
         tx_buf.push(b'\0');
+        // FIXME: Uses heap:
         tx_buf.extend_from_slice(size.to_string().as_bytes());
         tx_buf.push(b'\0');
 
         Self {
             encoding: Encoding::ZBIN32,
-            kind: FrameKind::ZFILE,
+            kind: Frame::ZFILE,
             flags: [0; 4],
         }
         .write(port)?;
@@ -144,18 +145,26 @@ impl Header {
         write_subpacket(port, Encoding::ZBIN32, PacketKind::ZCRCW, &tx_buf)
     }
 
-    // TODO: Read file's name and size.
-    pub fn read_zfile<P>(&self, port: &mut P) -> io::Result<Option<RxBuffer>>
+    pub fn read_zfile<P>(&self, port: &mut P) -> io::Result<Option<File>>
     where
         P: Read + Write,
     {
         let mut rx_buf = RxBuffer::new();
         let result = read_subpacket(port, self.encoding(), &mut rx_buf);
-
         match result {
             Ok(_) => {
                 ZRPOS_HEADER.with_count(0).write(port)?;
-                Ok(Some(rx_buf))
+                let reader: ZfileReader = Cursor::new(rx_buf)
+                    .read_ne()
+                    .or::<io::Error>(Err(ErrorKind::InvalidData.into()))?;
+                if reader.file_name.len() > 255 {
+                    return Err(ErrorKind::InvalidData.into());
+                }
+                let mut name = [0; 256];
+                for (i, b) in reader.file_name.as_slice().iter().enumerate() {
+                    name[i] = *b;
+                }
+                Ok(Some(File { name }))
             }
             Err(err) => {
                 if err.kind() == ErrorKind::InvalidData {
@@ -203,7 +212,7 @@ impl Header {
         if self.encoding == Encoding::ZHEX {
             // Add trailing CRLF for ZHEX transfer:
             out.extend_from_slice(b"\r\n");
-            if self.kind != FrameKind::ZACK && self.kind != FrameKind::ZFIN {
+            if self.kind != Frame::ZACK && self.kind != Frame::ZFIN {
                 out.push(XON);
             }
         }
@@ -225,8 +234,7 @@ impl Header {
             out.truncate(out.len() / 2);
         }
         check_crc(&out[..5], &out[5..], encoding)?;
-        let kind =
-            FrameKind::try_from(out[0]).or::<io::Error>(Err(ErrorKind::InvalidData.into()))?;
+        let kind = Frame::try_from(out[0]).or::<io::Error>(Err(ErrorKind::InvalidData.into()))?;
         let mut header = Header::new(encoding, kind);
         header.flags.copy_from_slice(&out[1..=4]);
         Ok(header)
@@ -301,7 +309,7 @@ impl Display for Encoding {
 #[allow(clippy::upper_case_acronyms)]
 #[derive(Clone, Copy, Debug, PartialEq)]
 /// Frame types
-pub enum FrameKind {
+pub enum Frame {
     /// Request receive init
     ZRQINIT = 0,
     /// Receiver capabilities and packet size
@@ -344,44 +352,44 @@ pub enum FrameKind {
     ZSTDERR = 19,
 }
 
-const FRAMES: &[FrameKind] = &[
-    FrameKind::ZRQINIT,
-    FrameKind::ZRINIT,
-    FrameKind::ZSINIT,
-    FrameKind::ZACK,
-    FrameKind::ZFILE,
-    FrameKind::ZSKIP,
-    FrameKind::ZNAK,
-    FrameKind::ZABORT,
-    FrameKind::ZFIN,
-    FrameKind::ZRPOS,
-    FrameKind::ZDATA,
-    FrameKind::ZEOF,
-    FrameKind::ZFERR,
-    FrameKind::ZCRC,
-    FrameKind::ZCHALLENGE,
-    FrameKind::ZCOMPL,
-    FrameKind::ZCAN,
-    FrameKind::ZFREECNT,
-    FrameKind::ZCOMMAND,
-    FrameKind::ZSTDERR,
+const FRAMES: &[Frame] = &[
+    Frame::ZRQINIT,
+    Frame::ZRINIT,
+    Frame::ZSINIT,
+    Frame::ZACK,
+    Frame::ZFILE,
+    Frame::ZSKIP,
+    Frame::ZNAK,
+    Frame::ZABORT,
+    Frame::ZFIN,
+    Frame::ZRPOS,
+    Frame::ZDATA,
+    Frame::ZEOF,
+    Frame::ZFERR,
+    Frame::ZCRC,
+    Frame::ZCHALLENGE,
+    Frame::ZCOMPL,
+    Frame::ZCAN,
+    Frame::ZFREECNT,
+    Frame::ZCOMMAND,
+    Frame::ZSTDERR,
 ];
 
 #[derive(Clone, Copy, Debug)]
-pub struct InvalidFrameKind;
+pub struct InvalidFrame;
 
-impl TryFrom<u8> for FrameKind {
-    type Error = InvalidFrameKind;
+impl TryFrom<u8> for Frame {
+    type Error = InvalidFrame;
 
     fn try_from(value: u8) -> Result<Self, Self::Error> {
         FRAMES
             .iter()
             .find(|t| value == **t as u8)
-            .map_or(Err(InvalidFrameKind), |t| Ok(*t))
+            .map_or(Err(InvalidFrame), |t| Ok(*t))
     }
 }
 
-impl Display for FrameKind {
+impl Display for Frame {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{:#02x}", *self as u8)
     }
@@ -409,12 +417,9 @@ bitflags! {
     }
 }
 
-/// `ZFILE` payload
-#[derive(BinRead)]
-#[br(assert(file_name.len() != 0))]
-pub struct Zfile {
-    file_name: NullString,
-    file_attributes: NullString,
+#[derive(PartialEq)]
+pub struct File {
+    name: [u8; 256],
 }
 
 #[repr(u8)]
@@ -454,6 +459,13 @@ impl Display for PacketKind {
         write!(f, "{:#02x}", *self as u8)
     }
 }
+
+#[derive(BinRead)]
+#[br(assert(file_name.len() != 0))]
+struct ZfileReader {
+    file_name: NullString,
+}
+
 #[derive(PartialEq)]
 enum Stage {
     Waiting,
@@ -487,7 +499,7 @@ where
         };
 
         match frame.kind() {
-            FrameKind::ZRINIT => match stage {
+            Frame::ZRINIT => match stage {
                 Stage::Waiting => {
                     let size = size.unwrap_or(0);
                     Header::write_zfile(port, name, size)?;
@@ -496,7 +508,7 @@ where
                 Stage::Ready => (),
                 Stage::Receiving => ZFIN_HEADER.write(port)?,
             },
-            FrameKind::ZRPOS | FrameKind::ZACK => {
+            Frame::ZRPOS | Frame::ZACK => {
                 if stage == Stage::Waiting {
                     ZRQINIT_HEADER.write(port)?;
                 } else {
@@ -519,12 +531,12 @@ where
 }
 
 /// Receives a file using the ZMODEM file transfer protocol.
-pub fn read<P, F>(port: &mut P, file: &mut F) -> io::Result<usize>
+pub fn read<P, F>(port: &mut P, out: &mut F) -> io::Result<(Option<File>, usize)>
 where
     P: Read + Write,
     F: Write,
 {
-    let mut stage = Stage::Waiting;
+    let mut file = None;
     let mut count = 0;
 
     Header::write_zrinit(
@@ -533,6 +545,7 @@ where
         Zrinit::CANCRY | Zrinit::CANOVIO | Zrinit::CANFC32,
         0,
     )?;
+
     loop {
         match read_zpad(port) {
             Err(ref err) if err.kind() == ErrorKind::InvalidData => continue,
@@ -548,41 +561,27 @@ where
             Ok(frame) => frame,
         };
         match frame.kind() {
-            FrameKind::ZFILE => {
-                if stage != Stage::Receiving {
+            Frame::ZFILE => {
+                if file.is_none() || count == 0 {
                     assert_eq!(count, 0);
-                    if let Some(rx_buf) = frame.read_zfile(port)? {
-                        let mut rx = Cursor::new(&rx_buf);
-                        let zfile: Zfile = rx
-                            .read_ne()
-                            .or::<io::Error>(Err(ErrorKind::InvalidData.into()))?;
-                        eprintln!(
-                            "ZFILE {:?} {:?}",
-                            zfile.file_name.to_string(),
-                            zfile.file_attributes.to_string(),
-                        );
-                    }
-                    stage = Stage::Ready
+                    file = frame.read_zfile(port)?;
                 }
             }
-            FrameKind::ZDATA => {
-                if stage == Stage::Waiting {
+            Frame::ZDATA => {
+                if file.is_none() {
                     Header::write_zrinit(
                         port,
                         Encoding::ZHEX,
                         Zrinit::CANCRY | Zrinit::CANOVIO | Zrinit::CANFC32,
                         0,
                     )?
+                } else if frame.count() != count {
+                    ZRPOS_HEADER.with_count(count).write(port)?
                 } else {
-                    if frame.count() != count {
-                        ZRPOS_HEADER.with_count(count).write(port)?
-                    } else {
-                        read_zdata(frame.encoding() as u8, &mut count, port, file)?;
-                    }
-                    stage = Stage::Receiving
+                    read_zdata(frame.encoding() as u8, &mut count, port, out)?;
                 }
             }
-            FrameKind::ZEOF if stage == Stage::Receiving => {
+            Frame::ZEOF if file.is_some() => {
                 if frame.count() != count {
                     log::error!(
                         "ZEOF offset mismatch: frame({}) != recv({})",
@@ -598,11 +597,11 @@ where
                     )?
                 }
             }
-            FrameKind::ZFIN if stage == Stage::Receiving => {
+            Frame::ZFIN if file.is_some() => {
                 ZFIN_HEADER.write(port)?;
                 break;
             }
-            _ if stage == Stage::Waiting => {
+            _ if file.is_none() => {
                 Header::write_zrinit(
                     port,
                     Encoding::ZHEX,
@@ -614,7 +613,7 @@ where
         }
     }
 
-    Ok(count as usize)
+    Ok((file, count as usize))
 }
 
 /// Writes a ZDATA
@@ -690,23 +689,20 @@ fn read_zpad<P>(port: &mut P) -> io::Result<()>
 where
     P: Read,
 {
-    let mut buf = [0; 1];
-
-    let mut value = port.read_exact(&mut buf).map(|_| buf[0])?;
-    if value != ZPAD {
+    if read_byte(port)? != ZPAD {
         return Err(ErrorKind::InvalidData.into());
     }
 
-    value = port.read_exact(&mut buf).map(|_| buf[0])?;
-    if value == ZPAD {
-        value = port.read_exact(&mut buf).map(|_| buf[0])?;
+    let mut b = read_byte(port)?;
+    if b == ZPAD {
+        b = read_byte(port)?;
     }
 
-    if value == ZDLE {
-        Ok(())
-    } else {
-        Err(ErrorKind::InvalidData.into())
+    if b == ZDLE {
+        return Ok(());
     }
+
+    Err(ErrorKind::InvalidData.into())
 }
 
 /// Reads and unescapes a ZMODEM protocol subpacket
@@ -849,18 +845,14 @@ fn escape_mem(src: &[u8], dst: &mut [u8]) -> usize {
 #[cfg(test)]
 mod tests {
     use crate::{
-        read_subpacket, read_zpad, write_subpacket, Encoding, FrameKind, Header, PacketKind,
-        RxBuffer, XON, ZDLE, ZPAD,
+        read_subpacket, read_zpad, write_subpacket, Encoding, Frame, Header, PacketKind, RxBuffer,
+        XON, ZDLE, ZPAD,
     };
 
     #[rstest::rstest]
-    #[case(Encoding::ZBIN, FrameKind::ZRQINIT, &[ZPAD, ZDLE, Encoding::ZBIN as u8, 0, 0, 0, 0, 0, 0, 0])]
-    #[case(Encoding::ZBIN32, FrameKind::ZRQINIT, &[ZPAD, ZDLE, Encoding::ZBIN32 as u8, 0, 0, 0, 0, 0, 29, 247, 34, 198])]
-    pub fn test_header(
-        #[case] encoding: Encoding,
-        #[case] kind: FrameKind,
-        #[case] expected: &[u8],
-    ) {
+    #[case(Encoding::ZBIN, Frame::ZRQINIT, &[ZPAD, ZDLE, Encoding::ZBIN as u8, 0, 0, 0, 0, 0, 0, 0])]
+    #[case(Encoding::ZBIN32, Frame::ZRQINIT, &[ZPAD, ZDLE, Encoding::ZBIN32 as u8, 0, 0, 0, 0, 0, 29, 247, 34, 198])]
+    pub fn test_header(#[case] encoding: Encoding, #[case] kind: Frame, #[case] expected: &[u8]) {
         let header = Header::new(encoding, kind).with_flags(&[0; 4]);
         let mut port = vec![];
         header.write(&mut port).unwrap();
@@ -868,11 +860,11 @@ mod tests {
     }
 
     #[rstest::rstest]
-    #[case(Encoding::ZBIN, FrameKind::ZRQINIT, &[1, 1, 1, 1], &[ZPAD, ZDLE, Encoding::ZBIN as u8, 0, 1, 1, 1, 1, 98, 148])]
-    #[case(Encoding::ZHEX, FrameKind::ZRQINIT, &[1, 1, 1, 1], &[ZPAD, ZPAD, ZDLE, Encoding::ZHEX as u8, b'0', b'0', b'0', b'1', b'0', b'1', b'0', b'1', b'0', b'1', 54, 50, 57, 52, b'\r', b'\n', XON])]
+    #[case(Encoding::ZBIN, Frame::ZRQINIT, &[1, 1, 1, 1], &[ZPAD, ZDLE, Encoding::ZBIN as u8, 0, 1, 1, 1, 1, 98, 148])]
+    #[case(Encoding::ZHEX, Frame::ZRQINIT, &[1, 1, 1, 1], &[ZPAD, ZPAD, ZDLE, Encoding::ZHEX as u8, b'0', b'0', b'0', b'1', b'0', b'1', b'0', b'1', b'0', b'1', 54, 50, 57, 52, b'\r', b'\n', XON])]
     pub fn test_header_with_flags(
         #[case] encoding: Encoding,
-        #[case] kind: FrameKind,
+        #[case] kind: Frame,
         #[case] flags: &[u8; 4],
         #[case] expected: &[u8],
     ) {
@@ -886,6 +878,8 @@ mod tests {
     #[case(&[ZPAD, ZDLE], Ok(()))]
     #[case(&[ZPAD, ZPAD, ZDLE], Ok(()))]
     #[case(&[ZDLE], Err(std::io::ErrorKind::InvalidData.into()))]
+    #[case(&[ZPAD, XON], Err(std::io::ErrorKind::InvalidData.into()))]
+    #[case(&[ZPAD, ZPAD, XON], Err(std::io::ErrorKind::InvalidData.into()))]
     #[case(&[], Err(std::io::ErrorKind::UnexpectedEof.into()))]
     #[case(&[0; 100], Err(std::io::ErrorKind::InvalidData.into()))]
     pub fn test_read_zpad(#[case] port: &[u8], #[case] expected: std::io::Result<()>) {
@@ -896,10 +890,10 @@ mod tests {
     }
 
     #[rstest::rstest]
-    #[case(&[Encoding::ZHEX as u8, b'0', b'1', b'0', b'1', b'0', b'2', b'0', b'3', b'0', b'4', b'a', b'7', b'5', b'2'], &Header::new(Encoding::ZHEX, FrameKind::ZRINIT).with_flags(&[0x1, 0x2, 0x3, 0x4]))]
-    #[case(&[Encoding::ZBIN as u8, FrameKind::ZRINIT as u8, 0xa, 0xb, 0xc, 0xd, 0xa6, 0xcb], &Header::new(Encoding::ZBIN, FrameKind::ZRINIT).with_flags(&[0xa, 0xb, 0xc, 0xd]))]
-    #[case(&[Encoding::ZBIN32 as u8, FrameKind::ZRINIT as u8, 0xa, 0xb, 0xc, 0xd, 0x99, 0xe2, 0xae, 0x4a], &Header::new(Encoding::ZBIN32, FrameKind::ZRINIT).with_flags(&[0xa, 0xb, 0xc, 0xd]))]
-    #[case(&[Encoding::ZBIN as u8, FrameKind::ZRINIT as u8, 0xa, ZDLE, b'l', 0xd, ZDLE, b'm', 0x5e, 0x6f], &Header::new(Encoding::ZBIN, FrameKind::ZRINIT).with_flags(&[0xa, 0x7f, 0xd, 0xff]))]
+    #[case(&[Encoding::ZHEX as u8, b'0', b'1', b'0', b'1', b'0', b'2', b'0', b'3', b'0', b'4', b'a', b'7', b'5', b'2'], &Header::new(Encoding::ZHEX, Frame::ZRINIT).with_flags(&[0x1, 0x2, 0x3, 0x4]))]
+    #[case(&[Encoding::ZBIN as u8, Frame::ZRINIT as u8, 0xa, 0xb, 0xc, 0xd, 0xa6, 0xcb], &Header::new(Encoding::ZBIN, Frame::ZRINIT).with_flags(&[0xa, 0xb, 0xc, 0xd]))]
+    #[case(&[Encoding::ZBIN32 as u8, Frame::ZRINIT as u8, 0xa, 0xb, 0xc, 0xd, 0x99, 0xe2, 0xae, 0x4a], &Header::new(Encoding::ZBIN32, Frame::ZRINIT).with_flags(&[0xa, 0xb, 0xc, 0xd]))]
+    #[case(&[Encoding::ZBIN as u8, Frame::ZRINIT as u8, 0xa, ZDLE, b'l', 0xd, ZDLE, b'm', 0x5e, 0x6f], &Header::new(Encoding::ZBIN, Frame::ZRINIT).with_flags(&[0xa, 0x7f, 0xd, 0xff]))]
     pub fn test_header_read(#[case] input: &[u8], #[case] expected: &Header) {
         let input = input.to_vec();
         assert_eq!(&mut Header::read(&mut input.as_slice()).unwrap(), expected);
