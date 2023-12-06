@@ -151,7 +151,7 @@ impl Header {
         count: u16,
     ) -> core::result::Result<(), InvalidData>
     where
-        P: Write,
+        P: Writer,
     {
         let count = count.to_le_bytes();
         Self {
@@ -160,7 +160,6 @@ impl Header {
             flags: [count[0], count[1], 0, zrinit.bits()],
         }
         .write(port)
-        .or(Err(InvalidData))
     }
 
     pub fn write_zfile<P>(
@@ -169,7 +168,7 @@ impl Header {
         size: u32,
     ) -> core::result::Result<(), InvalidData>
     where
-        P: Write,
+        P: Writer,
     {
         let mut tx_buf = TxBuffer::new();
 
@@ -215,7 +214,7 @@ impl Header {
 
     pub fn write<P>(&self, port: &mut P) -> core::result::Result<(), InvalidData>
     where
-        P: Write,
+        P: Writer,
     {
         let mut out = array_vec!([u8; HEADER_SIZE]);
         out.push(ZPAD);
@@ -253,7 +252,7 @@ impl Header {
                 out.push(XON);
             }
         }
-        port.write_all(&out).or(Err(InvalidData))
+        port.write(&out)
     }
 
     pub fn read<P>(port: &mut P) -> core::result::Result<Header, InvalidData>
@@ -690,7 +689,7 @@ fn read_zdata<P, F>(
     file: &mut F,
 ) -> core::result::Result<(), InvalidData>
 where
-    P: Write + Read,
+    P: Writer + Read,
     F: Writer,
 {
     let mut buf = RxBuffer::new();
@@ -788,12 +787,12 @@ fn write_subpacket<P>(
     data: &[u8],
 ) -> core::result::Result<(), InvalidData>
 where
-    P: Write,
+    P: Writer,
 {
     let kind = kind as u8;
     let mut buf = [0u8; (SUBPACKET_SIZE * 2) as usize];
     let mut len = escape_mem(data, &mut buf[0..(SUBPACKET_SIZE * 2) as usize]);
-    port.write_all(&buf[..len]).or(Err(InvalidData))?;
+    port.write(&buf[..len])?;
     match encoding {
         Encoding::ZBIN32 => {
             let mut digest = CRC32.digest();
@@ -817,8 +816,8 @@ where
             unimplemented!()
         }
     };
-    port.write_all(&[ZDLE, kind]).or(Err(InvalidData))?;
-    port.write_all(&buf[..len]).or(Err(InvalidData))?;
+    port.write(&[ZDLE, kind])?;
+    port.write(&buf[..len])?;
     Ok(())
 }
 
