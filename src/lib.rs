@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //! ZMODEM file transfer protocol
 
-use binread::{io::Cursor, BinRead, BinReaderExt, NullString};
+use binrw::{io::Cursor, BinRead, BinReaderExt, NullString};
 use bitflags::bitflags;
 use core::convert::TryFrom;
 use crc::{Crc, CRC_16_XMODEM, CRC_32_ISO_HDLC};
+use heapless::String;
 use std::fmt::{self, Display};
 use std::io::{Read, Seek, SeekFrom, Write};
 use tinyvec::{array_vec, ArrayVec};
@@ -186,13 +187,13 @@ impl Header {
     where
         P: Writer,
     {
+        let size = String::<16>::try_from(size).or(Err(InvalidData))?;
         let mut tx_buf = TxBuffer::new();
 
         tx_buf.truncate(0);
         tx_buf.extend_from_slice(name.as_bytes());
         tx_buf.push(b'\0');
-        // FIXME: Uses heap:
-        tx_buf.extend_from_slice(size.to_string().as_bytes());
+        tx_buf.extend_from_slice(size.as_ref());
         tx_buf.push(b'\0');
 
         Self {
