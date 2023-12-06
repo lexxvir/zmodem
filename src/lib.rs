@@ -710,9 +710,8 @@ where
             if let Ok(packet) = Packet::try_from(byte) {
                 buf.push(packet as u8);
                 break packet;
-            } else {
-                buf.push(UNZDLE_TABLE[byte as usize]);
             }
+            buf.push(UNZDLE_TABLE[byte as usize]);
         } else {
             buf.push(byte);
         }
@@ -802,17 +801,14 @@ fn check_crc(data: &[u8], crc: &[u8], encoding: Encoding) -> core::result::Resul
 }
 
 fn make_crc(data: &[u8], out: &mut [u8], encoding: Encoding) -> usize {
-    match encoding {
-        Encoding::ZBIN32 => {
-            let crc = CRC32.checksum(data).to_le_bytes();
-            out[..4].copy_from_slice(&crc[..4]);
-            4
-        }
-        _ => {
-            let crc = CRC16.checksum(data).to_be_bytes();
-            out[..2].copy_from_slice(&crc[..2]);
-            2
-        }
+    if encoding == Encoding::ZBIN32 {
+        let crc = CRC32.checksum(data).to_le_bytes();
+        out[..4].copy_from_slice(&crc[..4]);
+        4
+    } else {
+        let crc = CRC16.checksum(data).to_be_bytes();
+        out[..2].copy_from_slice(&crc[..2]);
+        2
     }
 }
 
