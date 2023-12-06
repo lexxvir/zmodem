@@ -75,6 +75,24 @@ pub const UNZDLE_TABLE: [u8; 0x100] = [
     0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa, 0xfb, 0xfc, 0xfd, 0xfe, 0xff,
 ];
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct InvalidData;
+
+pub trait Reader {
+    fn read(&mut self, offset: u32, buf: &mut [u8]) -> Result<usize, InvalidData>;
+}
+
+impl<P> Reader for P
+where
+    P: Read + Seek,
+{
+    fn read(&mut self, offset: u32, buf: &mut [u8]) -> Result<usize, InvalidData> {
+        self.seek(SeekFrom::Start(offset as u64))
+            .or(Err(InvalidData))?;
+        self.read(buf).or(Err(InvalidData))
+    }
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Header {
@@ -368,9 +386,6 @@ const FRAMES: &[Frame] = &[
     Frame::ZSTDERR,
 ];
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct InvalidData;
-
 impl TryFrom<u8> for Frame {
     type Error = InvalidData;
 
@@ -467,7 +482,7 @@ pub fn write<P, F>(
 ) -> core::result::Result<(), InvalidData>
 where
     P: Read + Write,
-    F: Read + Seek,
+    F: Reader,
 {
     let mut stage = Stage::Waiting;
 
@@ -608,15 +623,12 @@ fn write_zdata<P, F>(
 ) -> core::result::Result<(), InvalidData>
 where
     P: Read + Write,
-    F: Read + Seek,
+    F: Reader,
 {
     let mut data = [0; SUBPACKET_SIZE];
     let mut offset: u32 = header.count();
 
-    file.seek(SeekFrom::Start(offset as u64))
-        .or(Err(InvalidData))?;
-
-    let mut count = file.read(&mut data).or(Err(InvalidData))?;
+    let mut count = file.read(offset, &mut data)?;
     if count == 0 {
         ZEOF_HEADER.with_count(offset).write(port)?;
         return Ok(());
@@ -627,7 +639,7 @@ where
         write_subpacket(port, Encoding::ZBIN32, Packet::ZCRCG, &data[..count])?;
         offset += count as u32;
 
-        count = file.read(&mut data).or(Err(InvalidData))?;
+        count = file.read(offset, &mut data)?;
         if count < SUBPACKET_SIZE {
             break;
         }
