@@ -24,7 +24,7 @@ const ZNAK_HEADER: Header = Header::new(Encoding::ZHEX, Frame::ZNAK);
 const ZRPOS_HEADER: Header = Header::new(Encoding::ZHEX, Frame::ZRPOS);
 const ZRQINIT_HEADER: Header = Header::new(Encoding::ZHEX, Frame::ZRQINIT);
 
-const SUBPACKET_SIZE: usize = 1024;
+const SUBPACKET_SIZE: u32 = 1024;
 const SUBPACKET_PER_ACK: usize = 10;
 /// Buffer size with enough capacity for an escaped header.
 const HEADER_SIZE: usize = 32;
@@ -79,17 +79,26 @@ pub const UNZDLE_TABLE: [u8; 0x100] = [
 pub struct InvalidData;
 
 pub trait Reader {
-    fn read(&mut self, offset: u32, buf: &mut [u8]) -> Result<usize, InvalidData>;
+    fn read(&mut self, buf: &mut [u8]) -> Result<u32, InvalidData>;
+    fn seek(&mut self, offset: u32) -> Result<(), InvalidData>;
 }
 
 impl<R> Reader for R
 where
     R: Read + Seek,
 {
-    fn read(&mut self, offset: u32, buf: &mut [u8]) -> Result<usize, InvalidData> {
-        self.seek(SeekFrom::Start(offset as u64))
-            .or(Err(InvalidData))?;
-        self.read(buf).or(Err(InvalidData))
+    fn read(&mut self, buf: &mut [u8]) -> Result<u32, InvalidData> {
+        Ok(self.read(buf).or(Err(InvalidData))? as u32)
+    }
+
+    fn seek(&mut self, offset: u32) -> Result<(), InvalidData> {
+        let new_offset = self
+            .seek(SeekFrom::Start(offset as u64))
+            .or(Err(InvalidData))? as u32;
+        if offset != new_offset {
+            return Err(InvalidData);
+        }
+        Ok(())
     }
 }
 
@@ -638,10 +647,11 @@ where
     P: Read + Write,
     F: Reader,
 {
-    let mut data = [0; SUBPACKET_SIZE];
+    let mut data = [0; SUBPACKET_SIZE as usize];
     let mut offset: u32 = header.count();
 
-    let mut count = file.read(offset, &mut data)?;
+    file.seek(offset)?;
+    let mut count: u32 = file.read(&mut data)?;
     if count == 0 {
         ZEOF_HEADER.with_count(offset).write(port)?;
         return Ok(());
@@ -649,16 +659,26 @@ where
 
     ZDATA_HEADER.with_count(offset).write(port)?;
     for _ in 1..SUBPACKET_PER_ACK {
-        write_subpacket(port, Encoding::ZBIN32, Packet::ZCRCG, &data[..count])?;
-        offset += count as u32;
+        write_subpacket(
+            port,
+            Encoding::ZBIN32,
+            Packet::ZCRCG,
+            &data[..count as usize],
+        )?;
+        offset += count;
 
-        count = file.read(offset, &mut data)?;
+        count = file.read(&mut data)?;
         if count < SUBPACKET_SIZE {
             break;
         }
     }
 
-    write_subpacket(port, Encoding::ZBIN32, Packet::ZCRCW, &data[..count])?;
+    write_subpacket(
+        port,
+        Encoding::ZBIN32,
+        Packet::ZCRCW,
+        &data[..count as usize],
+    )?;
     Ok(())
 }
 
@@ -771,8 +791,8 @@ where
     P: Write,
 {
     let kind = kind as u8;
-    let mut buf = [0u8; SUBPACKET_SIZE * 2];
-    let mut len = escape_mem(data, &mut buf[0..SUBPACKET_SIZE * 2]);
+    let mut buf = [0u8; (SUBPACKET_SIZE * 2) as usize];
+    let mut len = escape_mem(data, &mut buf[0..(SUBPACKET_SIZE * 2) as usize]);
     port.write_all(&buf[..len]).or(Err(InvalidData))?;
     match encoding {
         Encoding::ZBIN32 => {
@@ -781,7 +801,7 @@ where
             digest.update(&[kind]);
             len = escape_mem(
                 &digest.finalize().to_le_bytes(),
-                &mut buf[0..SUBPACKET_SIZE * 2],
+                &mut buf[0..(SUBPACKET_SIZE * 2) as usize],
             )
         }
         Encoding::ZBIN => {
@@ -790,7 +810,7 @@ where
             digest.update(&[kind]);
             len = escape_mem(
                 &digest.finalize().to_be_bytes(),
-                &mut buf[0..SUBPACKET_SIZE * 2],
+                &mut buf[0..(SUBPACKET_SIZE * 2) as usize],
             )
         }
         Encoding::ZHEX => {
