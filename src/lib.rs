@@ -25,16 +25,21 @@ const ZNAK_HEADER: Header = Header::new(Encoding::ZHEX, Frame::ZNAK);
 const ZRPOS_HEADER: Header = Header::new(Encoding::ZHEX, Frame::ZRPOS);
 const ZRQINIT_HEADER: Header = Header::new(Encoding::ZHEX, Frame::ZRQINIT);
 
-const SUBPACKET_SIZE: u32 = 1024;
-const SUBPACKET_PER_ACK: usize = 10;
-/// Buffer size with enough capacity for an escaped header.
+/// Size of the unescaped subpacketa. The size was picked based on maximum
+/// subpacket size in the original 1988 ZMODEM specification.
+const SUBPACKET_SIZE: usize = 1024;
+
+/// Buffer size with enough capacity for an escaped header
 const HEADER_SIZE: usize = 32;
 
-/// Receive buffer
-type RxBuffer = ArrayVec<[u8; 2048]>;
-/// Transmit buffer. The size is picked based on maximum subpacket size in the
-/// original 1988 ZMODEM specification.
-type TxBuffer = ArrayVec<[u8; 1024]>;
+/// The number of subpackets to stream
+const SUBPACKET_PER_ACK: usize = 10;
+
+/// Buffer for the escaped data
+type EscapedData = ArrayVec<[u8; SUBPACKET_SIZE * 2]>;
+
+/// Buffer for the unescaped data
+type UnescapeData = ArrayVec<[u8; SUBPACKET_SIZE]>;
 
 /// https://play.rust-lang.org/?version=stable&mode=debug&edition=2021&gist=20db24d9f0aaff4d13f0144416f34d46
 const ZDLE_TABLE: [u8; 0x100] = [
@@ -188,7 +193,7 @@ impl Header {
         P: Writer,
     {
         let size = String::<16>::try_from(size).or(Err(InvalidData))?;
-        let mut tx_buf = TxBuffer::new();
+        let mut tx_buf = UnescapeData::new();
 
         tx_buf.truncate(0);
         tx_buf.extend_from_slice(name.as_bytes());
@@ -210,7 +215,7 @@ impl Header {
     where
         P: ByteReader + Writer,
     {
-        let mut rx_buf = RxBuffer::new();
+        let mut rx_buf = EscapedData::new();
         let result = read_subpacket(port, self.encoding(), &mut rx_buf);
         match result {
             Ok(_) => {
@@ -663,11 +668,12 @@ where
     P: ByteReader + Writer,
     F: Reader,
 {
-    let mut data = [0; SUBPACKET_SIZE as usize];
     let mut offset: u32 = header.count();
+    let mut tx_buf = UnescapeData::new();
+    tx_buf.set_len(tx_buf.capacity());
 
     file.seek(offset)?;
-    let mut count: u32 = file.read(&mut data)?;
+    let mut count: u32 = file.read(&mut tx_buf)?;
     if count == 0 {
         ZEOF_HEADER.with_count(offset).write(port)?;
         return Ok(());
@@ -679,12 +685,12 @@ where
             port,
             Encoding::ZBIN32,
             Packet::ZCRCG,
-            &data[..count as usize],
+            &tx_buf[..count as usize],
         )?;
         offset += count;
 
-        count = file.read(&mut data)?;
-        if count < SUBPACKET_SIZE {
+        count = file.read(&mut tx_buf)?;
+        if (count as usize) < tx_buf.capacity() {
             break;
         }
     }
@@ -693,7 +699,7 @@ where
         port,
         Encoding::ZBIN32,
         Packet::ZCRCW,
-        &data[..count as usize],
+        &tx_buf[..count as usize],
     )?;
     Ok(())
 }
@@ -709,7 +715,7 @@ where
     P: ByteReader + Writer,
     F: Writer,
 {
-    let mut buf = RxBuffer::new();
+    let mut buf = EscapedData::new();
 
     loop {
         buf.clear();
@@ -762,7 +768,7 @@ where
 fn read_subpacket<P>(
     port: &mut P,
     encoding: Encoding,
-    buf: &mut RxBuffer,
+    buf: &mut EscapedData,
 ) -> core::result::Result<Packet, InvalidData>
 where
     P: ByteReader,
@@ -807,8 +813,9 @@ where
     P: Writer,
 {
     let kind = kind as u8;
-    let mut buf = [0u8; (SUBPACKET_SIZE * 2) as usize];
-    let mut len = escape_mem(data, &mut buf[0..(SUBPACKET_SIZE * 2) as usize]);
+    let mut buf = EscapedData::new();
+    buf.set_len(SUBPACKET_SIZE * 2);
+    let mut len = escape_mem(data, &mut buf[0..SUBPACKET_SIZE * 2]);
     port.write(&buf[..len])?;
     match encoding {
         Encoding::ZBIN32 => {
@@ -817,7 +824,7 @@ where
             digest.update(&[kind]);
             len = escape_mem(
                 &digest.finalize().to_le_bytes(),
-                &mut buf[0..(SUBPACKET_SIZE * 2) as usize],
+                &mut buf[0..SUBPACKET_SIZE * 2],
             )
         }
         Encoding::ZBIN => {
@@ -826,7 +833,7 @@ where
             digest.update(&[kind]);
             len = escape_mem(
                 &digest.finalize().to_be_bytes(),
-                &mut buf[0..(SUBPACKET_SIZE * 2) as usize],
+                &mut buf[0..SUBPACKET_SIZE * 2],
             )
         }
         Encoding::ZHEX => {
@@ -894,8 +901,8 @@ fn escape_mem(src: &[u8], dst: &mut [u8]) -> usize {
 #[cfg(test)]
 mod tests {
     use crate::{
-        read_subpacket, read_zpad, write_subpacket, Encoding, Frame, Header, InvalidData, Packet,
-        RxBuffer, XON, ZDLE, ZPAD,
+        read_subpacket, read_zpad, write_subpacket, Encoding, EscapedData, Frame, Header,
+        InvalidData, Packet, XON, ZDLE, ZPAD,
     };
 
     #[rstest::rstest]
@@ -962,7 +969,7 @@ mod tests {
     ) {
         let mut port = vec![];
         write_subpacket(&mut port, encoding, kind, data).unwrap();
-        let mut rx_buf = RxBuffer::new();
+        let mut rx_buf = EscapedData::new();
         assert_eq!(
             read_subpacket(&mut port.as_slice(), encoding, &mut rx_buf).unwrap(),
             kind
