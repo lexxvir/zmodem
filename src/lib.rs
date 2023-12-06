@@ -82,14 +82,27 @@ pub trait Reader {
     fn read(&mut self, offset: u32, buf: &mut [u8]) -> Result<usize, InvalidData>;
 }
 
-impl<P> Reader for P
+impl<R> Reader for R
 where
-    P: Read + Seek,
+    R: Read + Seek,
 {
     fn read(&mut self, offset: u32, buf: &mut [u8]) -> Result<usize, InvalidData> {
         self.seek(SeekFrom::Start(offset as u64))
             .or(Err(InvalidData))?;
         self.read(buf).or(Err(InvalidData))
+    }
+}
+
+pub trait Writer {
+    fn write(&mut self, buf: &[u8]) -> Result<(), InvalidData>;
+}
+
+impl<W> Writer for W
+where
+    W: Write,
+{
+    fn write(&mut self, buf: &[u8]) -> Result<(), InvalidData> {
+        self.write_all(buf).or(Err(InvalidData))
     }
 }
 
@@ -538,7 +551,7 @@ pub fn read<P, F>(
 ) -> core::result::Result<(), InvalidData>
 where
     P: Read + Write,
-    F: Write,
+    F: Writer,
 {
     if state.0.is_none() {
         assert_eq!(state.1, 0);
@@ -658,7 +671,7 @@ fn read_zdata<P, F>(
 ) -> core::result::Result<(), InvalidData>
 where
     P: Write + Read,
-    F: Write,
+    F: Writer,
 {
     let mut buf = RxBuffer::new();
 
@@ -672,7 +685,7 @@ where
             }
             Ok(zcrc) => zcrc,
         };
-        file.write_all(&buf).or(Err(InvalidData))?;
+        file.write(&buf)?;
         *count += buf.len() as u32;
         match zcrc {
             Packet::ZCRCW => {
