@@ -6,6 +6,10 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.73"
 
+[features]
+default = ["std"]
+std = []
+
 [dependencies]
 binrw = "0.13.3"
 bitflags = "2.4.1"

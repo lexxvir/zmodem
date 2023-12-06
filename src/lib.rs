@@ -1,13 +1,18 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //! ZMODEM file transfer protocol
 
+#![cfg_attr(not(feature = "std"), no_std)]
+
 use binrw::{io::Cursor, BinRead, BinReaderExt, NullString};
 use bitflags::bitflags;
 use core::convert::TryFrom;
 use crc::{Crc, CRC_16_XMODEM, CRC_32_ISO_HDLC};
 use heapless::String;
-use std::fmt::{self, Display};
-use std::io::{Read, Seek, SeekFrom, Write};
+#[cfg(feature = "std")]
+use std::{
+    fmt::{self, Display},
+    io::{Read, Seek, SeekFrom, Write},
+};
 use tinyvec::{array_vec, ArrayVec};
 
 const CRC16: Crc<u16> = Crc::<u16>::new(&CRC_16_XMODEM);
@@ -88,6 +93,7 @@ pub trait Writer {
     fn write(&mut self, buf: &[u8]) -> Result<(), InvalidData>;
 }
 
+#[cfg(feature = "std")]
 impl<W> Writer for W
 where
     W: Write,
@@ -102,6 +108,7 @@ pub trait Reader {
     fn seek(&mut self, offset: u32) -> Result<(), InvalidData>;
 }
 
+#[cfg(feature = "std")]
 impl<R> Reader for R
 where
     R: Read + Seek,
@@ -125,6 +132,7 @@ pub trait ByteReader {
     fn read_byte(&mut self) -> Result<u8, InvalidData>;
 }
 
+#[cfg(feature = "std")]
 impl<R> ByteReader for R
 where
     R: Read,
@@ -324,6 +332,7 @@ impl Header {
     }
 }
 
+#[cfg(feature = "std")]
 impl fmt::Display for Header {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{:8} {}", self.encoding, self.kind)
@@ -353,6 +362,7 @@ impl TryFrom<u8> for Encoding {
     }
 }
 
+#[cfg(feature = "std")]
 impl Display for Encoding {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{:#02x}", *self as u8)
@@ -440,6 +450,7 @@ impl TryFrom<u8> for Frame {
     }
 }
 
+#[cfg(feature = "std")]
 impl Display for Frame {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{:#02x}", *self as u8)
@@ -497,6 +508,7 @@ impl TryFrom<u8> for Packet {
     }
 }
 
+#[cfg(feature = "std")]
 impl Display for Packet {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{:#02x}", *self as u8)
