@@ -78,6 +78,19 @@ pub const UNZDLE_TABLE: [u8; 0x100] = [
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct InvalidData;
 
+pub trait Writer {
+    fn write(&mut self, buf: &[u8]) -> Result<(), InvalidData>;
+}
+
+impl<W> Writer for W
+where
+    W: Write,
+{
+    fn write(&mut self, buf: &[u8]) -> Result<(), InvalidData> {
+        self.write_all(buf).or(Err(InvalidData))
+    }
+}
+
 pub trait Reader {
     fn read(&mut self, buf: &mut [u8]) -> Result<u32, InvalidData>;
     fn seek(&mut self, offset: u32) -> Result<(), InvalidData>;
@@ -102,16 +115,19 @@ where
     }
 }
 
-pub trait Writer {
-    fn write(&mut self, buf: &[u8]) -> Result<(), InvalidData>;
+pub trait ByteReader {
+    fn read_byte(&mut self) -> Result<u8, InvalidData>;
 }
 
-impl<W> Writer for W
+impl<R> ByteReader for R
 where
-    W: Write,
+    R: Read,
 {
-    fn write(&mut self, buf: &[u8]) -> Result<(), InvalidData> {
-        self.write_all(buf).or(Err(InvalidData))
+    fn read_byte(&mut self) -> Result<u8, InvalidData> {
+        let mut buf = [0; 1];
+        self.read_exact(&mut buf)
+            .map(|_| buf[0])
+            .or(Err(InvalidData))
     }
 }
 
@@ -191,7 +207,7 @@ impl Header {
 
     pub fn read_zfile<P>(&self, port: &mut P) -> core::result::Result<Option<File>, InvalidData>
     where
-        P: Read + Write,
+        P: ByteReader + Writer,
     {
         let mut rx_buf = RxBuffer::new();
         let result = read_subpacket(port, self.encoding(), &mut rx_buf);
@@ -257,9 +273,9 @@ impl Header {
 
     pub fn read<P>(port: &mut P) -> core::result::Result<Header, InvalidData>
     where
-        P: Read,
+        P: ByteReader,
     {
-        let encoding = Encoding::try_from(read_byte(port)?)?;
+        let encoding = Encoding::try_from(port.read_byte()?)?;
         let mut out = array_vec!([u8; HEADER_SIZE]);
         for _ in 0..Header::unescaped_size(encoding) - 1 {
             out.push(read_byte_unescaped(port)?);
@@ -502,7 +518,7 @@ pub fn write<P, F>(
     size: Option<u32>,
 ) -> core::result::Result<(), InvalidData>
 where
-    P: Read + Write,
+    P: ByteReader + Writer,
     F: Reader,
 {
     let mut stage = Stage::Waiting;
@@ -541,7 +557,7 @@ where
                 if stage == Stage::Waiting {
                     ZRQINIT_HEADER.write(port)?;
                 } else {
-                    port.write_all("OO".as_bytes()).or(Err(InvalidData))?;
+                    port.write("OO".as_bytes())?;
                     break;
                 }
             }
@@ -558,7 +574,7 @@ pub fn read<P, F>(
     out: &mut F,
 ) -> core::result::Result<(), InvalidData>
 where
-    P: Read + Write,
+    P: ByteReader + Writer,
     F: Writer,
 {
     if state.0.is_none() {
@@ -643,7 +659,7 @@ fn write_zdata<P, F>(
     header: &Header,
 ) -> core::result::Result<(), InvalidData>
 where
-    P: Read + Write,
+    P: ByteReader + Writer,
     F: Reader,
 {
     let mut data = [0; SUBPACKET_SIZE as usize];
@@ -689,7 +705,7 @@ fn read_zdata<P, F>(
     file: &mut F,
 ) -> core::result::Result<(), InvalidData>
 where
-    P: Writer + Read,
+    P: ByteReader + Writer,
     F: Writer,
 {
     let mut buf = RxBuffer::new();
@@ -723,15 +739,15 @@ where
 /// Skips (ZPAD, [ZPAD,] ZDLE) sequence.
 fn read_zpad<P>(port: &mut P) -> core::result::Result<(), InvalidData>
 where
-    P: Read,
+    P: ByteReader,
 {
-    if read_byte(port)? != ZPAD {
+    if port.read_byte()? != ZPAD {
         return Err(InvalidData);
     }
 
-    let mut b = read_byte(port)?;
+    let mut b = port.read_byte()?;
     if b == ZPAD {
-        b = read_byte(port)?;
+        b = port.read_byte()?;
     }
 
     if b == ZDLE {
@@ -748,14 +764,14 @@ fn read_subpacket<P>(
     buf: &mut RxBuffer,
 ) -> core::result::Result<Packet, InvalidData>
 where
-    P: Read,
+    P: ByteReader,
 {
     let result;
 
     loop {
-        let byte = read_byte(port)?;
+        let byte = port.read_byte()?;
         if byte == ZDLE {
-            let byte = read_byte(port)?;
+            let byte = port.read_byte()?;
             if let Ok(kind) = Packet::try_from(byte) {
                 buf.push(kind as u8);
                 result = kind;
@@ -850,24 +866,14 @@ fn make_crc(data: &[u8], out: &mut [u8], encoding: Encoding) -> usize {
 
 fn read_byte_unescaped<P>(port: &mut P) -> core::result::Result<u8, InvalidData>
 where
-    P: Read,
+    P: ByteReader,
 {
-    let b = read_byte(port)?;
+    let b = port.read_byte()?;
     Ok(if b == ZDLE {
-        UNZDLE_TABLE[read_byte(port)? as usize]
+        UNZDLE_TABLE[port.read_byte()? as usize]
     } else {
         b
     })
-}
-
-fn read_byte<P>(port: &mut P) -> core::result::Result<u8, InvalidData>
-where
-    P: Read,
-{
-    let mut buf = [0; 1];
-    port.read_exact(&mut buf)
-        .map(|_| buf[0])
-        .or(Err(InvalidData))
 }
 
 fn escape_mem(src: &[u8], dst: &mut [u8]) -> usize {
