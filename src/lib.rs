@@ -13,7 +13,7 @@ use std::{
     fmt::{self, Display},
     io::{Read, Seek, SeekFrom, Write},
 };
-use tinyvec::{array_vec, ArrayVec};
+use tinyvec::{array_vec, ArrayVec, SliceVec};
 
 const CRC16: Crc<u16> = Crc::<u16>::new(&CRC_16_XMODEM);
 const CRC32: Crc<u32> = Crc::<u32>::new(&CRC_32_ISO_HDLC);
@@ -30,8 +30,8 @@ const ZNAK_HEADER: Header = Header::new(Encoding::ZHEX, Frame::ZNAK);
 const ZRPOS_HEADER: Header = Header::new(Encoding::ZHEX, Frame::ZRPOS);
 const ZRQINIT_HEADER: Header = Header::new(Encoding::ZHEX, Frame::ZRQINIT);
 
-/// Size of the unescaped subpacketa. The size was picked based on maximum
-/// subpacket size in the original 1988 ZMODEM specification.
+/// Size of the unescaped subpacket payload. The size was picked based on
+/// maximum subpacket size in the original 1988 ZMODEM specification.
 const PAYLOAD_SIZE: usize = 1024;
 
 /// Buffer size with enough capacity for an escaped header
@@ -42,9 +42,6 @@ const SUBPACKET_PER_ACK: usize = 10;
 
 /// Buffer for the escaped data
 type EscapedPayload = ArrayVec<[u8; PAYLOAD_SIZE * 2]>;
-
-/// Buffer for the unescaped data
-type Payload = ArrayVec<[u8; PAYLOAD_SIZE]>;
 
 /// https://play.rust-lang.org/?version=stable&mode=debug&edition=2021&gist=20db24d9f0aaff4d13f0144416f34d46
 const ZDLE_TABLE: [u8; 0x100] = [
@@ -186,74 +183,6 @@ impl Header {
 
     pub const fn count(&self) -> u32 {
         u32::from_le_bytes(self.flags)
-    }
-
-    pub fn write_zrinit<P>(
-        port: &mut P,
-        encoding: Encoding,
-        zrinit: Zrinit,
-        count: u16,
-    ) -> core::result::Result<(), InvalidData>
-    where
-        P: PortWrite,
-    {
-        let count = count.to_le_bytes();
-        Self {
-            encoding,
-            kind: Frame::ZRINIT,
-            flags: [count[0], count[1], 0, zrinit.bits()],
-        }
-        .write(port)
-    }
-
-    pub fn write_zfile<P>(
-        port: &mut P,
-        name: &str,
-        size: u32,
-    ) -> core::result::Result<(), InvalidData>
-    where
-        P: PortWrite,
-    {
-        let size = String::<16>::try_from(size).or(Err(InvalidData))?;
-        let mut tx_buf = Payload::new();
-
-        tx_buf.truncate(0);
-        tx_buf.extend_from_slice(name.as_bytes());
-        tx_buf.push(b'\0');
-        tx_buf.extend_from_slice(size.as_ref());
-        tx_buf.push(b'\0');
-
-        Self {
-            encoding: Encoding::ZBIN32,
-            kind: Frame::ZFILE,
-            flags: [0; 4],
-        }
-        .write(port)?;
-
-        write_subpacket(port, Encoding::ZBIN32, Packet::ZCRCW, &tx_buf)
-    }
-
-    pub fn read_zfile<P>(&self, port: &mut P) -> core::result::Result<Option<File>, InvalidData>
-    where
-        P: PortRead + PortWrite,
-    {
-        let mut rx_buf = EscapedPayload::new();
-        let result = read_subpacket(port, self.encoding(), &mut rx_buf);
-        match result {
-            Ok(_) => {
-                ZRPOS_HEADER.with_count(0).write(port)?;
-                let reader: ZfileReader = Cursor::new(rx_buf).read_ne().or(Err(InvalidData))?;
-                if reader.file_name.len() > 255 {
-                    return Err(InvalidData);
-                }
-                let mut name = [0; 256];
-                for (i, b) in reader.file_name.as_slice().iter().enumerate() {
-                    name[i] = *b;
-                }
-                Ok(Some(File { name }))
-            }
-            _ => ZNAK_HEADER.write(port).and(Ok(None)),
-        }
     }
 
     pub fn write<P>(&self, port: &mut P) -> core::result::Result<(), InvalidData>
@@ -563,7 +492,7 @@ where
             Frame::ZRINIT => match stage {
                 Stage::Waiting => {
                     let size = size.unwrap_or(0);
-                    Header::write_zfile(port, name, size)?;
+                    write_zfile(port, name, size)?;
                     stage = Stage::Ready;
                 }
                 Stage::Ready => (),
@@ -573,7 +502,7 @@ where
                 if stage == Stage::Waiting {
                     ZRQINIT_HEADER.write(port)?;
                 } else {
-                    write_zdata(port, file, &frame)?;
+                    write_zdata(port, file, frame.count())?;
                     stage = Stage::Receiving;
                 }
             }
@@ -604,7 +533,7 @@ where
 {
     if state.0.is_none() {
         assert_eq!(state.1, 0);
-        Header::write_zrinit(
+        write_zrinit(
             port,
             Encoding::ZHEX,
             Zrinit::CANCRY | Zrinit::CANOVIO | Zrinit::CANFC32,
@@ -627,12 +556,12 @@ where
             Frame::ZFILE => {
                 if state.0.is_none() || state.1 == 0 {
                     assert_eq!(state.1, 0);
-                    state.0 = frame.read_zfile(port)?;
+                    state.0 = read_zfile(port, &frame)?;
                 }
             }
             Frame::ZDATA => {
                 if state.0.is_none() {
-                    Header::write_zrinit(
+                    write_zrinit(
                         port,
                         Encoding::ZHEX,
                         Zrinit::CANCRY | Zrinit::CANOVIO | Zrinit::CANFC32,
@@ -652,7 +581,7 @@ where
                         state.1
                     );
                 } else {
-                    Header::write_zrinit(
+                    write_zrinit(
                         port,
                         Encoding::ZHEX,
                         Zrinit::CANCRY | Zrinit::CANOVIO | Zrinit::CANFC32,
@@ -664,7 +593,7 @@ where
                 ZFIN_HEADER.write(port)?;
                 break;
             }
-            _ if state.0.is_none() => Header::write_zrinit(
+            _ if state.0.is_none() => write_zrinit(
                 port,
                 Encoding::ZHEX,
                 Zrinit::CANCRY | Zrinit::CANOVIO | Zrinit::CANFC32,
@@ -677,22 +606,93 @@ where
     Ok(())
 }
 
-/// Writes a ZDATA
+/// Writes ZRINIT
+pub fn write_zrinit<P>(
+    port: &mut P,
+    encoding: Encoding,
+    zrinit: Zrinit,
+    count: u16,
+) -> core::result::Result<(), InvalidData>
+where
+    P: PortWrite,
+{
+    let count = count.to_le_bytes();
+    Header {
+        encoding,
+        kind: Frame::ZRINIT,
+        flags: [count[0], count[1], 0, zrinit.bits()],
+    }
+    .write(port)
+}
+
+/// Write ZRFILE
+pub fn write_zfile<P>(port: &mut P, name: &str, size: u32) -> core::result::Result<(), InvalidData>
+where
+    P: PortWrite,
+{
+    let size = String::<16>::try_from(size).or(Err(InvalidData))?;
+
+    let mut payload = [0; PAYLOAD_SIZE];
+    let mut payload = SliceVec::from_slice_len(&mut payload, 0);
+
+    payload.truncate(0);
+    payload.extend_from_slice(name.as_bytes());
+    payload.push(b'\0');
+    payload.extend_from_slice(size.as_ref());
+    payload.push(b'\0');
+
+    Header {
+        encoding: Encoding::ZBIN32,
+        kind: Frame::ZFILE,
+        flags: [0; 4],
+    }
+    .write(port)?;
+
+    write_subpacket(port, Encoding::ZBIN32, Packet::ZCRCW, &payload)
+}
+
+/// Read ZFILE
+pub fn read_zfile<P>(
+    port: &mut P,
+    header: &Header,
+) -> core::result::Result<Option<File>, InvalidData>
+where
+    P: PortRead + PortWrite,
+{
+    let mut payload = EscapedPayload::new();
+    let result = read_subpacket(port, header.encoding(), &mut payload);
+    match result {
+        Ok(_) => {
+            ZRPOS_HEADER.with_count(0).write(port)?;
+            let reader: ZfileReader = Cursor::new(payload).read_ne().or(Err(InvalidData))?;
+            if reader.file_name.len() > 255 {
+                return Err(InvalidData);
+            }
+            let mut name = [0; 256];
+            for (i, b) in reader.file_name.as_slice().iter().enumerate() {
+                name[i] = *b;
+            }
+            Ok(Some(File { name }))
+        }
+        _ => ZNAK_HEADER.write(port).and(Ok(None)),
+    }
+}
+
+/// Writes ZDATA
 fn write_zdata<P, F>(
     port: &mut P,
     file: &mut F,
-    header: &Header,
+    offset: u32,
 ) -> core::result::Result<(), InvalidData>
 where
     P: PortRead + PortWrite,
     F: FileRead,
 {
-    let mut offset: u32 = header.count();
-    let mut tx_buf = Payload::new();
-    tx_buf.set_len(tx_buf.capacity());
+    let mut payload = [0; PAYLOAD_SIZE];
+    let mut offset = offset;
 
     file.seek(offset)?;
-    let mut count: u32 = file.read(&mut tx_buf)?;
+    let mut count: u32 = file.read(&mut payload)?;
     if count == 0 {
         ZEOF_HEADER.with_count(offset).write(port)?;
         return Ok(());
@@ -704,12 +704,12 @@ where
             port,
             Encoding::ZBIN32,
             Packet::ZCRCG,
-            &tx_buf[..count as usize],
+            &payload[..count as usize],
         )?;
         offset += count;
 
-        count = file.read(&mut tx_buf)?;
-        if (count as usize) < tx_buf.capacity() {
+        count = file.read(&mut payload)?;
+        if (count as usize) < payload.len() {
             break;
         }
     }
@@ -718,12 +718,12 @@ where
         port,
         Encoding::ZBIN32,
         Packet::ZCRCW,
-        &tx_buf[..count as usize],
+        &payload[..count as usize],
     )?;
     Ok(())
 }
 
-/// Reads a ZDATA packet
+/// Reads ZDATA
 fn read_zdata<P, F>(
     encoding: u8,
     count: &mut u32,
