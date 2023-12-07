@@ -23,7 +23,6 @@ impl Read for CombinedStdInOut {
 impl Write for CombinedStdInOut {
     fn write(&mut self, buf: &[u8]) -> Result<usize> {
         let r = self.stdout.write(buf)?;
-        self.stdout.flush()?;
         Ok(r)
     }
 
