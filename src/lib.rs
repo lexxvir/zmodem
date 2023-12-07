@@ -688,7 +688,7 @@ where
     P: PortRead + PortWrite,
     F: FileRead,
 {
-    let mut payload = [0; PAYLOAD_SIZE];
+    let mut payload = [0; PAYLOAD_SIZE - 2];
     let mut offset = offset;
 
     file.seek(offset)?;
