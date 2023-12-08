@@ -22,13 +22,13 @@ const ZPAD: u8 = b'*';
 const ZDLE: u8 = 0x18;
 const XON: u8 = 0x11;
 
-const ZACK_HEADER: Header = Header::new(Encoding::ZHEX, Frame::ZACK);
-const ZDATA_HEADER: Header = Header::new(Encoding::ZBIN32, Frame::ZDATA);
-const ZEOF_HEADER: Header = Header::new(Encoding::ZBIN32, Frame::ZEOF);
-const ZFIN_HEADER: Header = Header::new(Encoding::ZHEX, Frame::ZFIN);
-const ZNAK_HEADER: Header = Header::new(Encoding::ZHEX, Frame::ZNAK);
-const ZRPOS_HEADER: Header = Header::new(Encoding::ZHEX, Frame::ZRPOS);
-const ZRQINIT_HEADER: Header = Header::new(Encoding::ZHEX, Frame::ZRQINIT);
+const ZACK_HEADER: Header = Header::new(Encoding::ZHEX, Frame::ZACK, &[0; 4]);
+const ZDATA_HEADER: Header = Header::new(Encoding::ZBIN32, Frame::ZDATA, &[0; 4]);
+const ZEOF_HEADER: Header = Header::new(Encoding::ZBIN32, Frame::ZEOF, &[0; 4]);
+const ZFIN_HEADER: Header = Header::new(Encoding::ZHEX, Frame::ZFIN, &[0; 4]);
+const ZNAK_HEADER: Header = Header::new(Encoding::ZHEX, Frame::ZNAK, &[0; 4]);
+const ZRPOS_HEADER: Header = Header::new(Encoding::ZHEX, Frame::ZRPOS, &[0; 4]);
+const ZRQINIT_HEADER: Header = Header::new(Encoding::ZHEX, Frame::ZRQINIT, &[0; 4]);
 
 /// Size of the unescaped subpacket payload. The size was picked based on
 /// maximum subpacket size in the original 1988 ZMODEM specification.
@@ -165,11 +165,11 @@ pub struct Header {
 }
 
 impl Header {
-    pub const fn new(encoding: Encoding, kind: Frame) -> Self {
+    pub const fn new(encoding: Encoding, frame: Frame, flags: &[u8; 4]) -> Self {
         Self {
             encoding,
-            frame: kind,
-            flags: [0; 4],
+            frame,
+            flags: *flags,
         }
     }
 
@@ -234,8 +234,8 @@ impl Header {
             out.truncate(out.len() / 2);
         }
         check_crc(&out[..5], &out[5..], encoding)?;
-        let kind = Frame::try_from(out[0])?;
-        let mut header = Header::new(encoding, kind);
+        let frame = Frame::try_from(out[0])?;
+        let mut header = Header::new(encoding, frame, &[0; 4]);
         header.flags.copy_from_slice(&out[1..=4]);
         Ok(header)
     }
@@ -245,14 +245,6 @@ impl Header {
             encoding: self.encoding,
             frame: self.frame,
             flags: count.to_le_bytes(),
-        }
-    }
-
-    pub const fn with_flags(&self, flags: &[u8; 4]) -> Self {
-        Header {
-            encoding: self.encoding,
-            frame: self.frame,
-            flags: *flags,
         }
     }
 
@@ -994,7 +986,7 @@ mod tests {
         #[case] flags: &[u8; 4],
         #[case] expected: &[u8],
     ) {
-        let header = Header::new(encoding, frame).with_flags(flags);
+        let header = Header::new(encoding, frame, flags);
         let mut port = vec![];
         assert!(header.write(&mut port) == Ok(()));
         assert_eq!(port, expected);
@@ -1013,7 +1005,7 @@ mod tests {
     ) {
         let port = &mut port.to_vec();
         let port = &mut port.as_slice();
-        assert!(Header::read(port) == Ok(Header::new(encoding, frame).with_flags(flags)));
+        assert!(Header::read(port) == Ok(Header::new(encoding, frame, flags)));
     }
 
     #[rstest::rstest]
