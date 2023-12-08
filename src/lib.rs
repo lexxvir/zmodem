@@ -627,7 +627,7 @@ where
 }
 
 /// Writes ZRINIT
-pub fn write_zrinit<P>(
+fn write_zrinit<P>(
     port: &mut P,
     encoding: Encoding,
     zrinit: Zrinit,
@@ -646,7 +646,7 @@ where
 }
 
 /// Write ZRFILE
-pub fn write_zfile<P>(port: &mut P, name: &str, size: u32) -> core::result::Result<(), InvalidData>
+fn write_zfile<P>(port: &mut P, name: &str, size: u32) -> core::result::Result<(), InvalidData>
 where
     P: PortWrite,
 {
@@ -672,10 +672,7 @@ where
 }
 
 /// Read ZFILE
-pub fn read_zfile<P>(
-    port: &mut P,
-    header: &Header,
-) -> core::result::Result<Option<File>, InvalidData>
+fn read_zfile<P>(port: &mut P, header: &Header) -> core::result::Result<Option<File>, InvalidData>
 where
     P: PortRead + PortWrite,
 {
