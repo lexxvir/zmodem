@@ -18,6 +18,8 @@ fn main() {
     let mut file =
         File::create(filename).unwrap_or_else(|_| panic!("Cannot create file {:?}:", filename));
 
-    let mut inout = stdinout::CombinedStdInOut::new();
-    zmodem::read(&mut inout, &mut (None, 0), &mut file).unwrap();
+    let mut port = stdinout::CombinedStdInOut::new();
+    let mut state = zmodem::State::new();
+
+    zmodem::read(&mut port, &mut state, &mut file).unwrap();
 }

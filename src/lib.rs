@@ -160,7 +160,7 @@ where
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Header {
     encoding: Encoding,
-    kind: Frame,
+    frame: Frame,
     flags: [u8; 4],
 }
 
@@ -168,7 +168,7 @@ impl Header {
     pub const fn new(encoding: Encoding, kind: Frame) -> Self {
         Self {
             encoding,
-            kind,
+            frame: kind,
             flags: [0; 4],
         }
     }
@@ -178,7 +178,7 @@ impl Header {
     }
 
     pub const fn kind(&self) -> Frame {
-        self.kind
+        self.frame
     }
 
     pub const fn count(&self) -> u32 {
@@ -196,7 +196,7 @@ impl Header {
         }
         port.write_byte(ZDLE)?;
         port.write_byte(self.encoding as u8)?;
-        out.push(self.kind as u8);
+        out.push(self.frame as u8);
         out.extend_from_slice(&self.flags);
         // Skips ZPAD and encoding:
         let mut crc = [0u8; 4];
@@ -213,7 +213,7 @@ impl Header {
             // Add trailing CRLF for ZHEX transfer:
             port.write_byte(b'\r')?;
             port.write_byte(b'\n')?;
-            if self.kind != Frame::ZACK && self.kind != Frame::ZFIN {
+            if self.frame != Frame::ZACK && self.frame != Frame::ZFIN {
                 port.write_byte(XON)?;
             }
         }
@@ -243,7 +243,7 @@ impl Header {
     pub const fn with_count(&self, count: u32) -> Self {
         Header {
             encoding: self.encoding,
-            kind: self.kind,
+            frame: self.frame,
             flags: count.to_le_bytes(),
         }
     }
@@ -251,7 +251,7 @@ impl Header {
     pub const fn with_flags(&self, flags: &[u8; 4]) -> Self {
         Header {
             encoding: self.encoding,
-            kind: self.kind,
+            frame: self.frame,
             flags: *flags,
         }
     }
@@ -270,7 +270,7 @@ impl Header {
 #[cfg(feature = "std")]
 impl fmt::Display for Header {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{:8} {}", self.encoding, self.kind)
+        write!(f, "{:8} {}", self.encoding, self.frame)
     }
 }
 
@@ -521,18 +521,44 @@ where
     Ok(())
 }
 
+pub struct State {
+    frame: Option<Frame>,
+    file: Option<File>,
+    count: u32,
+}
+
+impl Default for State {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl State {
+    pub const fn new() -> Self {
+        State {
+            frame: None,
+            file: None,
+            count: 0,
+        }
+    }
+
+    pub fn frame(&self) -> Option<Frame> {
+        self.frame
+    }
+}
+
 /// Receives a file using the ZMODEM file transfer protocol.
 pub fn read<P, F>(
     port: &mut P,
-    state: &mut (Option<File>, u32),
+    state: &mut State,
     out: &mut F,
 ) -> core::result::Result<(), InvalidData>
 where
     P: PortRead + PortWrite,
     F: FileWrite,
 {
-    if state.0.is_none() {
-        assert_eq!(state.1, 0);
+    if state.file.is_none() {
+        assert_eq!(state.count, 0);
         write_zrinit(
             port,
             Encoding::ZHEX,
@@ -541,44 +567,45 @@ where
         )?
     }
 
+    let mut header;
     loop {
         if read_zpad(port).is_err() {
             continue;
         }
-        let frame = match Header::read(port) {
+        header = match Header::read(port) {
             Err(_) => {
                 ZNAK_HEADER.write(port)?;
                 continue;
             }
             Ok(frame) => frame,
         };
-        match frame.kind() {
+        match header.kind() {
             Frame::ZFILE => {
-                if state.0.is_none() || state.1 == 0 {
-                    assert_eq!(state.1, 0);
-                    state.0 = read_zfile(port, &frame)?;
+                if state.file.is_none() || state.count == 0 {
+                    assert_eq!(state.count, 0);
+                    state.file = read_zfile(port, &header)?;
                 }
             }
             Frame::ZDATA => {
-                if state.0.is_none() {
+                if state.file.is_none() {
                     write_zrinit(
                         port,
                         Encoding::ZHEX,
                         Zrinit::CANCRY | Zrinit::CANOVIO | Zrinit::CANFC32,
                         0,
                     )?;
-                } else if frame.count() != state.1 {
-                    ZRPOS_HEADER.with_count(state.1).write(port)?
+                } else if header.count() != state.count {
+                    ZRPOS_HEADER.with_count(state.count).write(port)?
                 } else {
-                    read_zdata(frame.encoding() as u8, &mut state.1, port, out)?;
+                    read_zdata(header.encoding() as u8, &mut state.count, port, out)?;
                 }
             }
-            Frame::ZEOF if state.0.is_some() => {
-                if frame.count() != state.1 {
+            Frame::ZEOF if state.file.is_some() => {
+                if header.count() != state.count {
                     log::error!(
                         "ZEOF offset mismatch: frame({}) != recv({})",
-                        frame.count(),
-                        state.1
+                        header.count(),
+                        state.count
                     );
                 } else {
                     write_zrinit(
@@ -589,11 +616,11 @@ where
                     )?
                 }
             }
-            Frame::ZFIN if state.0.is_some() => {
+            Frame::ZFIN if state.file.is_some() => {
                 ZFIN_HEADER.write(port)?;
                 break;
             }
-            _ if state.0.is_none() => write_zrinit(
+            _ if state.file.is_none() => write_zrinit(
                 port,
                 Encoding::ZHEX,
                 Zrinit::CANCRY | Zrinit::CANOVIO | Zrinit::CANFC32,
@@ -603,6 +630,7 @@ where
         }
     }
 
+    state.frame = Some(header.frame);
     Ok(())
 }
 
@@ -619,7 +647,7 @@ where
     let count = count.to_le_bytes();
     Header {
         encoding,
-        kind: Frame::ZRINIT,
+        frame: Frame::ZRINIT,
         flags: [count[0], count[1], 0, zrinit.bits()],
     }
     .write(port)
@@ -643,7 +671,7 @@ where
 
     Header {
         encoding: Encoding::ZBIN32,
-        kind: Frame::ZFILE,
+        frame: Frame::ZFILE,
         flags: [0; 4],
     }
     .write(port)?;
