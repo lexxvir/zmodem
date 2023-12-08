@@ -177,7 +177,7 @@ impl Header {
         self.encoding
     }
 
-    pub const fn kind(&self) -> Frame {
+    pub const fn frame(&self) -> Frame {
         self.frame
     }
 
@@ -476,7 +476,7 @@ where
             }
             Ok(frame) => frame,
         };
-        match frame.kind() {
+        match frame.frame() {
             Frame::ZRINIT => match stage {
                 Stage::Waiting => {
                     let size = size.unwrap_or(0);
@@ -545,11 +545,10 @@ where
     P: PortRead + PortWrite,
     F: FileWrite,
 {
-    if state.file.is_none() {
-        assert_eq!(state.count, 0);
+    if state.frame.is_none() {
+        assert!(state.file.is_none() && state.count == 0);
         write_zrinit(port)?
     }
-
     let mut header;
     loop {
         if read_zpad(port).is_err() {
@@ -562,43 +561,46 @@ where
             }
             Ok(frame) => frame,
         };
-        match header.kind() {
+        match header.frame() {
             Frame::ZFILE => {
-                if state.file.is_none() || state.count == 0 {
-                    assert_eq!(state.count, 0);
-                    state.file = read_zfile(port, &header)?;
+                if state.frame.is_some() && state.frame != Some(Frame::ZFILE) {
+                    continue;
                 }
+                assert_eq!(state.count, 0);
+                state.file = read_zfile(port, &header)?;
+                state.frame = Some(Frame::ZFILE);
             }
             Frame::ZDATA => {
-                if state.file.is_none() {
+                if state.frame.is_none() {
                     write_zrinit(port)?;
-                } else if header.count() != state.count {
-                    ZRPOS_HEADER.with_count(state.count).write(port)?
-                } else {
-                    read_zdata(header.encoding() as u8, &mut state.count, port, out)?;
+                    continue;
                 }
-            }
-            Frame::ZEOF if state.file.is_some() => {
                 if header.count() != state.count {
-                    log::error!(
-                        "ZEOF offset mismatch: frame({}) != recv({})",
-                        header.count(),
-                        state.count
-                    );
-                } else {
-                    write_zrinit(port)?
+                    ZRPOS_HEADER.with_count(state.count).write(port)?;
+                    continue;
                 }
+                read_zdata(header.encoding() as u8, &mut state.count, port, out)?;
+                state.frame = Some(Frame::ZDATA);
             }
-            Frame::ZFIN if state.file.is_some() => {
+            Frame::ZEOF => {
+                if state.frame != Some(Frame::ZDATA) || header.count() != state.count {
+                    continue;
+                }
+                write_zrinit(port)?;
+                state.frame = Some(Frame::ZEOF);
+            }
+            Frame::ZFIN => {
+                if state.frame != Some(Frame::ZEOF) {
+                    continue;
+                }
                 ZFIN_HEADER.write(port)?;
+                state.frame = Some(Frame::ZFIN);
                 break;
             }
             _ if state.file.is_none() => write_zrinit(port)?,
             _ => (),
         }
     }
-
-    state.frame = Some(header.frame);
     Ok(())
 }
 
