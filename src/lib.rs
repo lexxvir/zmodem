@@ -984,43 +984,20 @@ mod tests {
     };
 
     #[rstest::rstest]
-    #[case(Encoding::ZBIN, Frame::ZRQINIT, &[ZPAD, ZDLE, Encoding::ZBIN as u8, 0, 0, 0, 0, 0, 0, 0])]
-    #[case(Encoding::ZBIN32, Frame::ZRQINIT, &[ZPAD, ZDLE, Encoding::ZBIN32 as u8, 0, 0, 0, 0, 0, 29, 247, 34, 198])]
-    pub fn test_header(#[case] encoding: Encoding, #[case] kind: Frame, #[case] expected: &[u8]) {
-        let header = Header::new(encoding, kind).with_flags(&[0; 4]);
-        let mut port = vec![];
-        assert!(header.write(&mut port) == Ok(()));
-        assert_eq!(port, expected);
-    }
-
-    #[rstest::rstest]
-    #[case(Encoding::ZBIN, Frame::ZRQINIT, &[1, 1, 1, 1], &[ZPAD, ZDLE, Encoding::ZBIN as u8, 0, 1, 1, 1, 1, 98, 148])]
-    #[case(Encoding::ZHEX, Frame::ZRQINIT, &[1, 1, 1, 1], &[ZPAD, ZPAD, ZDLE, Encoding::ZHEX as u8, b'0', b'0', b'0', b'1', b'0', b'1', b'0', b'1', b'0', b'1', 54, 50, 57, 52, b'\r', b'\n', XON])]
-    pub fn test_header_with_flags(
+    #[case(Encoding::ZBIN, Frame::ZRQINIT, &[0; 4], &[ZPAD, ZDLE, Encoding::ZBIN as u8, 0, 0, 0, 0, 0, 0, 0])]
+    #[case(Encoding::ZBIN32, Frame::ZRQINIT, &[0; 4], &[ZPAD, ZDLE, Encoding::ZBIN32 as u8, 0, 0, 0, 0, 0, 29, 247, 34, 198])]
+    #[case(Encoding::ZBIN, Frame::ZRQINIT, &[1; 4], &[ZPAD, ZDLE, Encoding::ZBIN as u8, 0, 1, 1, 1, 1, 98, 148])]
+    #[case(Encoding::ZHEX, Frame::ZRQINIT, &[1; 4], &[ZPAD, ZPAD, ZDLE, Encoding::ZHEX as u8, b'0', b'0', b'0', b'1', b'0', b'1', b'0', b'1', b'0', b'1', 54, 50, 57, 52, b'\r', b'\n', XON])]
+    pub fn test_header_write(
         #[case] encoding: Encoding,
-        #[case] kind: Frame,
+        #[case] frame: Frame,
         #[case] flags: &[u8; 4],
         #[case] expected: &[u8],
     ) {
-        let header = Header::new(encoding, kind).with_flags(flags);
+        let header = Header::new(encoding, frame).with_flags(flags);
         let mut port = vec![];
         assert!(header.write(&mut port) == Ok(()));
         assert_eq!(port, expected);
-    }
-
-    #[rstest::rstest]
-    #[case(&[ZPAD, ZDLE], Ok(()))]
-    #[case(&[ZPAD, ZPAD, ZDLE], Ok(()))]
-    #[case(&[ZDLE], Err(InvalidData))]
-    #[case(&[ZPAD, XON], Err(InvalidData))]
-    #[case(&[ZPAD, ZPAD, XON], Err(InvalidData))]
-    #[case(&[], Err(InvalidData))]
-    #[case(&[0; 100], Err(InvalidData))]
-    pub fn test_read_zpad(
-        #[case] port: &[u8],
-        #[case] expected: core::result::Result<(), InvalidData>,
-    ) {
-        assert!(read_zpad(&mut port.to_vec().as_slice()) == expected);
     }
 
     #[rstest::rstest]
@@ -1043,7 +1020,7 @@ mod tests {
     #[case(Encoding::ZBIN, Packet::ZCRCE, &[])]
     #[case(Encoding::ZBIN, Packet::ZCRCW, &[0x00])]
     #[case(Encoding::ZBIN32, Packet::ZCRCQ, &[0, 1, 2, 3, 4, 0x60, 0x60])]
-    pub fn test_write_read_subpacket(
+    pub fn test_subpacket_read_write(
         #[case] encoding: Encoding,
         #[case] packet: Packet,
         #[case] data: &[u8],
@@ -1053,5 +1030,20 @@ mod tests {
         assert!(write_subpacket(&mut port, encoding, packet, data) == Ok(()));
         payload.extend_from_slice(data);
         assert!(read_subpacket(&mut port.as_slice(), encoding) == Ok((packet, payload)));
+    }
+
+    #[rstest::rstest]
+    #[case(&[ZPAD, ZDLE], Ok(()))]
+    #[case(&[ZPAD, ZPAD, ZDLE], Ok(()))]
+    #[case(&[ZDLE], Err(InvalidData))]
+    #[case(&[ZPAD, XON], Err(InvalidData))]
+    #[case(&[ZPAD, ZPAD, XON], Err(InvalidData))]
+    #[case(&[], Err(InvalidData))]
+    #[case(&[0; 100], Err(InvalidData))]
+    pub fn test_zpad_read(
+        #[case] port: &[u8],
+        #[case] expected: core::result::Result<(), InvalidData>,
+    ) {
+        assert!(read_zpad(&mut port.to_vec().as_slice()) == expected);
     }
 }
