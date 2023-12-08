@@ -1,5 +1,4 @@
 extern crate clap;
-extern crate log;
 extern crate zmodem;
 
 mod stdinout;

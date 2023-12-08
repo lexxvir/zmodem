@@ -1,4 +1,3 @@
-extern crate log;
 extern crate zmodem;
 #[macro_use]
 extern crate lazy_static;

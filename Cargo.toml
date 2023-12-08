@@ -16,7 +16,6 @@ bitflags = "2.4.1"
 crc = "3.0.1"
 heapless = "0.8.0"
 hex = { git = "https://github.com/jarkkojs/rust-hex.git", branch="feat/decode-in-slice" }
-log = "0.4.20"
 tinyvec = "1.6.0"
 
 [dev-dependencies]

@@ -729,7 +729,7 @@ where
             Packet::ZCRCQ => {
                 ZACK_HEADER.with_count(*count).write(port)?;
             }
-            Packet::ZCRCG => log::debug!("ZCRCG"),
+            Packet::ZCRCG => (),
         }
     }
 }
@@ -861,13 +861,11 @@ where
 fn check_crc(data: &[u8], crc: &[u8], encoding: Encoding) -> core::result::Result<(), InvalidData> {
     let mut crc2 = [0u8; 4];
     let crc2_len = make_crc(data, &mut crc2, encoding);
-
-    if *crc != crc2[..crc2_len] {
-        log::error!("ZCRC mismatch: {:?} != {:?}", crc, &crc2[..crc2_len]);
-        return Err(InvalidData);
+    if *crc == crc2[..crc2_len] {
+        Ok(())
+    } else {
+        Err(InvalidData)
     }
-
-    Ok(())
 }
 
 fn make_crc(data: &[u8], out: &mut [u8], encoding: Encoding) -> usize {
