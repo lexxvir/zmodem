@@ -22,5 +22,5 @@ fn main() {
 
     let mut inout = stdinout::CombinedStdInOut::new();
 
-    zmodem::write(&mut inout, &mut file, filename.to_str().unwrap(), size).unwrap();
+    assert!(zmodem::write(&mut inout, &mut file, filename.to_str().unwrap(), size) == Ok(()));
 }

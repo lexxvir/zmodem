@@ -21,5 +21,5 @@ fn main() {
     let mut port = stdinout::CombinedStdInOut::new();
     let mut state = zmodem::State::new();
 
-    zmodem::read(&mut port, &mut state, &mut file).unwrap();
+    assert!(zmodem::read(&mut port, &mut state, &mut file) == Ok(()));
 }

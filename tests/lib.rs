@@ -67,8 +67,8 @@ fn recv_from_sz() {
     let mut c = Cursor::new(Vec::new());
 
     let mut state = zmodem::State::new();
-    zmodem::read(&mut inout, &mut state, &mut c).unwrap();
-    assert_eq!(state.frame(), Some(zmodem::Frame::ZFIN));
+    assert!(zmodem::read(&mut inout, &mut state, &mut c) == Ok(()));
+    assert!(state.frame() == Some(zmodem::Frame::ZFIN));
 
     sleep(Duration::from_millis(300));
     remove_file("recv_from_sz").unwrap();
@@ -97,7 +97,7 @@ fn send_to_rz() {
 
     sleep(Duration::from_millis(300));
 
-    zmodem::write(&mut inout, &mut cur, "send_to_rz", Some(len)).unwrap();
+    assert!(zmodem::write(&mut inout, &mut cur, "send_to_rz", Some(len)) == Ok(()));
 
     sleep(Duration::from_millis(300));
 
@@ -137,7 +137,7 @@ fn lib_send_recv() {
         let origin = RND_VALUES.clone();
         let mut c = Cursor::new(&origin);
 
-        zmodem::write(&mut inout, &mut c, "test", None).unwrap();
+        assert!(zmodem::write(&mut inout, &mut c, "test", None) == Ok(()));
     });
 
     let mut c = Cursor::new(Vec::new());
@@ -147,8 +147,8 @@ fn lib_send_recv() {
     let mut inout = InOut::new(inf, outf);
 
     let mut state = zmodem::State::new();
-    zmodem::read(&mut inout, &mut state, &mut c).unwrap();
-    assert_eq!(state.frame(), Some(zmodem::Frame::ZFIN));
+    assert!(zmodem::read(&mut inout, &mut state, &mut c) == Ok(()));
+    assert!(state.frame() == Some(zmodem::Frame::ZFIN));
 
     let _ = remove_file("test-fifo1");
     let _ = remove_file("test-fifo2");
