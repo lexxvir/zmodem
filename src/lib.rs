@@ -241,11 +241,7 @@ impl Header {
     }
 
     pub const fn with_count(&self, count: u32) -> Self {
-        Header {
-            encoding: self.encoding,
-            frame: self.frame,
-            flags: count.to_le_bytes(),
-        }
+        Header::new(self.encoding, self.frame, &count.to_le_bytes())
     }
 
     const fn unescaped_size(encoding: Encoding) -> usize {
@@ -551,12 +547,7 @@ where
 {
     if state.file.is_none() {
         assert_eq!(state.count, 0);
-        write_zrinit(
-            port,
-            Encoding::ZHEX,
-            Zrinit::CANCRY | Zrinit::CANOVIO | Zrinit::CANFC32,
-            0,
-        )?
+        write_zrinit(port)?
     }
 
     let mut header;
@@ -580,12 +571,7 @@ where
             }
             Frame::ZDATA => {
                 if state.file.is_none() {
-                    write_zrinit(
-                        port,
-                        Encoding::ZHEX,
-                        Zrinit::CANCRY | Zrinit::CANOVIO | Zrinit::CANFC32,
-                        0,
-                    )?;
+                    write_zrinit(port)?;
                 } else if header.count() != state.count {
                     ZRPOS_HEADER.with_count(state.count).write(port)?
                 } else {
@@ -600,24 +586,14 @@ where
                         state.count
                     );
                 } else {
-                    write_zrinit(
-                        port,
-                        Encoding::ZHEX,
-                        Zrinit::CANCRY | Zrinit::CANOVIO | Zrinit::CANFC32,
-                        0,
-                    )?
+                    write_zrinit(port)?
                 }
             }
             Frame::ZFIN if state.file.is_some() => {
                 ZFIN_HEADER.write(port)?;
                 break;
             }
-            _ if state.file.is_none() => write_zrinit(
-                port,
-                Encoding::ZHEX,
-                Zrinit::CANCRY | Zrinit::CANOVIO | Zrinit::CANFC32,
-                0,
-            )?,
+            _ if state.file.is_none() => write_zrinit(port)?,
             _ => (),
         }
     }
@@ -627,22 +603,12 @@ where
 }
 
 /// Writes ZRINIT
-fn write_zrinit<P>(
-    port: &mut P,
-    encoding: Encoding,
-    zrinit: Zrinit,
-    count: u16,
-) -> core::result::Result<(), InvalidData>
+fn write_zrinit<P>(port: &mut P) -> core::result::Result<(), InvalidData>
 where
     P: PortWrite,
 {
-    let count = count.to_le_bytes();
-    Header {
-        encoding,
-        frame: Frame::ZRINIT,
-        flags: [count[0], count[1], 0, zrinit.bits()],
-    }
-    .write(port)
+    let zrinit = Zrinit::CANFDX | Zrinit::CANOVIO | Zrinit::CANFC32;
+    Header::new(Encoding::ZHEX, Frame::ZRINIT, &[0, 0, 0, zrinit.bits()]).write(port)
 }
 
 /// Write ZRFILE
@@ -651,23 +617,14 @@ where
     P: PortWrite,
 {
     let size = String::<16>::try_from(size).or(Err(InvalidData))?;
-
     let mut payload = [0; PAYLOAD_SIZE];
     let mut payload = SliceVec::from_slice_len(&mut payload, 0);
-
     payload.truncate(0);
     payload.extend_from_slice(name.as_bytes());
     payload.push(b'\0');
     payload.extend_from_slice(size.as_ref());
     payload.push(b'\0');
-
-    Header {
-        encoding: Encoding::ZBIN32,
-        frame: Frame::ZFILE,
-        flags: [0; 4],
-    }
-    .write(port)?;
-
+    Header::new(Encoding::ZBIN32, Frame::ZFILE, &[0; 4]).write(port)?;
     write_subpacket(port, Encoding::ZBIN32, Packet::ZCRCW, &payload)
 }
 
