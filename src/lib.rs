@@ -41,7 +41,7 @@ const HEADER_SIZE: usize = 32;
 const SUBPACKET_PER_ACK: usize = 10;
 
 /// Buffer for the escaped data
-type EscapedPayload = ArrayVec<[u8; PAYLOAD_SIZE * 2]>;
+type Payload = ArrayVec<[u8; PAYLOAD_SIZE]>;
 
 /// https://play.rust-lang.org/?version=stable&mode=debug&edition=2021&gist=20db24d9f0aaff4d13f0144416f34d46
 const ZDLE_TABLE: [u8; 0x100] = [
@@ -659,10 +659,8 @@ pub fn read_zfile<P>(
 where
     P: PortRead + PortWrite,
 {
-    let mut payload = EscapedPayload::new();
-    let result = read_subpacket(port, header.encoding(), &mut payload);
-    match result {
-        Ok(_) => {
+    match read_subpacket(port, header.encoding()) {
+        Ok((_, payload)) => {
             ZRPOS_HEADER.with_count(0).write(port)?;
             let reader: ZfileReader = Cursor::new(payload).read_ne().or(Err(InvalidData))?;
             if reader.file_name.len() > 255 {
@@ -734,17 +732,19 @@ where
     P: PortRead + PortWrite,
     F: FileWrite,
 {
-    let mut buf = EscapedPayload::new();
-
     loop {
-        buf.clear();
         let encoding = Encoding::try_from(encoding)?;
-        let zcrc = match read_subpacket(port, encoding, &mut buf) {
-            Err(_) => {
-                ZRPOS_HEADER.with_count(*count).write(port)?;
-                return Ok(());
+        let (zcrc, buf) = match read_subpacket(port, encoding) {
+            Err(InvalidData) => {
+                ZNAK_HEADER.with_count(*count).write(port)?;
+                continue;
             }
-            Ok(zcrc) => zcrc,
+            Ok((zcrc, buf)) => {
+                if buf.is_empty() {
+                    ZRPOS_HEADER.with_count(*count).write(port)?;
+                }
+                (zcrc, buf)
+            }
         };
         file.write(&buf)?;
         *count += buf.len() as u32;
@@ -787,26 +787,32 @@ where
 fn read_subpacket<P>(
     port: &mut P,
     encoding: Encoding,
-    buf: &mut EscapedPayload,
-) -> core::result::Result<Packet, InvalidData>
+) -> core::result::Result<(Packet, Payload), InvalidData>
 where
     P: PortRead,
 {
+    let mut buf = Payload::new();
     let result;
 
     loop {
         let byte = port.read_byte()?;
         if byte == ZDLE {
             let byte = port.read_byte()?;
-            if let Ok(kind) = Packet::try_from(byte) {
-                buf.push(kind as u8);
-                result = kind;
+            if let Ok(packet) = Packet::try_from(byte) {
+                buf.push(packet as u8);
+                result = packet;
                 break;
             } else {
                 buf.push(UNZDLE_TABLE[byte as usize]);
             }
         } else {
             buf.push(byte);
+        }
+
+        if buf.len() == buf.capacity() {
+            let packet = skip_subpacket_tail(port, encoding)?;
+            buf.set_len(0);
+            return Ok((packet, buf));
         }
     }
 
@@ -815,10 +821,36 @@ where
     for b in crc.iter_mut().take(crc_len) {
         *b = read_byte_unescaped(port)?;
     }
-    check_crc(buf, &crc[..crc_len], encoding)?;
+    check_crc(&buf, &crc[..crc_len], encoding)?;
 
     // Pop ZCRC
     buf.pop().unwrap();
+    Ok((result, buf))
+}
+
+/// Skips the tail of the subpacket (including CRC).
+fn skip_subpacket_tail<P>(
+    port: &mut P,
+    encoding: Encoding,
+) -> core::result::Result<Packet, InvalidData>
+where
+    P: PortRead,
+{
+    let result;
+    loop {
+        let byte = port.read_byte()?;
+        if byte == ZDLE {
+            let byte = port.read_byte()?;
+            if let Ok(packet) = Packet::try_from(byte) {
+                result = packet;
+                break;
+            }
+        }
+    }
+    let crc_len = if encoding == Encoding::ZBIN32 { 4 } else { 2 };
+    for _ in 0..crc_len {
+        read_byte_unescaped(port)?;
+    }
     Ok(result)
 }
 
@@ -919,8 +951,8 @@ where
 #[cfg(test)]
 mod tests {
     use crate::{
-        read_subpacket, read_zpad, write_subpacket, Encoding, EscapedPayload, Frame, Header,
-        InvalidData, Packet, XON, ZDLE, ZPAD,
+        read_subpacket, read_zpad, write_subpacket, Encoding, Frame, Header, InvalidData, Packet,
+        XON, ZDLE, ZPAD,
     };
 
     #[rstest::rstest]
@@ -982,16 +1014,13 @@ mod tests {
     #[case(Encoding::ZBIN32, Packet::ZCRCQ, &[0, 1, 2, 3, 4, 0x60, 0x60])]
     pub fn test_write_read_subpacket(
         #[case] encoding: Encoding,
-        #[case] kind: Packet,
-        #[case] data: &[u8],
+        #[case] expected_packet: Packet,
+        #[case] expected_data: &[u8],
     ) {
         let mut port = vec![];
-        write_subpacket(&mut port, encoding, kind, data).unwrap();
-        let mut rx_buf = EscapedPayload::new();
-        assert_eq!(
-            read_subpacket(&mut port.as_slice(), encoding, &mut rx_buf).unwrap(),
-            kind
-        );
-        assert_eq!(&rx_buf[..], data);
+        write_subpacket(&mut port, encoding, expected_packet, expected_data).unwrap();
+        let (packet, payload) = read_subpacket(&mut port.as_slice(), encoding).unwrap();
+        assert_eq!(packet, expected_packet);
+        assert_eq!(&payload[..], expected_data);
     }
 }
