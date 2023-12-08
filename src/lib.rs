@@ -549,58 +549,54 @@ where
         assert!(state.file.is_none() && state.count == 0);
         write_zrinit(port)?
     }
-    let mut header;
-    loop {
-        if read_zpad(port).is_err() {
-            continue;
-        }
-        header = match Header::read(port) {
-            Err(_) => {
-                ZNAK_HEADER.write(port)?;
-                continue;
-            }
-            Ok(frame) => frame,
-        };
-        match header.frame() {
-            Frame::ZFILE => {
-                if state.frame.is_some() && state.frame != Some(Frame::ZFILE) {
-                    continue;
-                }
-                assert_eq!(state.count, 0);
-                state.file = read_zfile(port, &header)?;
-                state.frame = Some(Frame::ZFILE);
-            }
-            Frame::ZDATA => {
-                if state.frame.is_none() {
-                    write_zrinit(port)?;
-                    continue;
-                }
-                if header.count() != state.count {
-                    ZRPOS_HEADER.with_count(state.count).write(port)?;
-                    continue;
-                }
-                read_zdata(header.encoding() as u8, &mut state.count, port, out)?;
-                state.frame = Some(Frame::ZDATA);
-            }
-            Frame::ZEOF => {
-                if state.frame != Some(Frame::ZDATA) || header.count() != state.count {
-                    continue;
-                }
-                write_zrinit(port)?;
-                state.frame = Some(Frame::ZEOF);
-            }
-            Frame::ZFIN => {
-                if state.frame != Some(Frame::ZEOF) {
-                    continue;
-                }
-                ZFIN_HEADER.write(port)?;
-                state.frame = Some(Frame::ZFIN);
-                break;
-            }
-            _ if state.file.is_none() => write_zrinit(port)?,
-            _ => (),
-        }
+    if read_zpad(port).is_err() {
+        return Ok(());
     }
+    let header = match Header::read(port) {
+        Err(_) => {
+            ZNAK_HEADER.write(port)?;
+            return Ok(());
+        }
+        Ok(header) => header,
+    };
+    match header.frame() {
+        Frame::ZFILE => {
+            if state.frame.is_some() && state.frame != Some(Frame::ZFILE) {
+                return Ok(());
+            }
+            assert_eq!(state.count, 0);
+            state.file = read_zfile(port, &header)?;
+            state.frame = Some(Frame::ZFILE);
+        }
+        Frame::ZDATA => {
+            if state.frame.is_none() {
+                write_zrinit(port)?;
+                return Ok(());
+            }
+            if header.count() != state.count {
+                ZRPOS_HEADER.with_count(state.count).write(port)?;
+                return Ok(());
+            }
+            read_zdata(header.encoding() as u8, &mut state.count, port, out)?;
+            state.frame = Some(Frame::ZDATA);
+        }
+        Frame::ZEOF => {
+            if state.frame != Some(Frame::ZDATA) || header.count() != state.count {
+                return Ok(());
+            }
+            write_zrinit(port)?;
+            state.frame = Some(Frame::ZEOF);
+        }
+        Frame::ZFIN => {
+            if state.frame != Some(Frame::ZEOF) {
+                return Ok(());
+            }
+            ZFIN_HEADER.write(port)?;
+            state.frame = Some(Frame::ZFIN);
+        }
+        _ if state.file.is_none() => write_zrinit(port)?,
+        _ => (),
+    };
     Ok(())
 }
 

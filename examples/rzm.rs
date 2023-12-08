@@ -20,6 +20,7 @@ fn main() {
 
     let mut port = stdinout::CombinedStdInOut::new();
     let mut state = zmodem::State::new();
-
-    assert!(zmodem::read(&mut port, &mut state, &mut file) == Ok(()));
+    while state.frame() != Some(zmodem::Frame::ZFIN) {
+        assert!(zmodem::read(&mut port, &mut state, &mut file) == Ok(()));
+    }
 }
