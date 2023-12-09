@@ -3,8 +3,7 @@ extern crate zmodem2;
 use std::fs::{remove_file, File, OpenOptions};
 use std::io::*;
 use std::process::*;
-use std::thread::{sleep, spawn};
-use std::time::*;
+use std::thread::spawn;
 
 struct InOut<R: Read, W: Write> {
     r: R,
@@ -58,7 +57,6 @@ fn recv_from_sz() {
         assert!(zmodem2::receive(&mut port, &mut file, &mut state) == Ok(()));
     }
 
-    sleep(Duration::from_millis(300));
     remove_file("recv_from_sz").unwrap();
 
     assert_eq!(TEST_DATA, file.into_inner());
@@ -82,16 +80,12 @@ fn send_to_rz() {
     let len = TEST_DATA.len() as u32;
     let copy = TEST_DATA;
     let mut file = Cursor::new(&copy);
-
-    sleep(Duration::from_millis(300));
-
     let mut state = zmodem2::State::new();
 
     while state.stage() != zmodem2::Stage::Done {
         assert!(zmodem2::send(&mut port, &mut file, &mut state, "send_to_rz", len) == Ok(()));
     }
 
-    sleep(Duration::from_millis(300));
 
     let mut f = File::open("send_to_rz").expect("open 'send_to_rz'");
     let mut received = Vec::new();
@@ -118,8 +112,6 @@ fn lib_send_recv() {
         .spawn()
         .expect("mkfifo failed to run")
         .wait();
-
-    sleep(Duration::from_millis(300));
 
     spawn(move || {
         let outf = OpenOptions::new().write(true).open("test-fifo1").unwrap();
