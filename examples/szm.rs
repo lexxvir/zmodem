@@ -14,7 +14,7 @@ fn main() {
     let fileopt = matches.value_of("file").unwrap();
     let mut file = File::open(fileopt).unwrap();
     let filename = Path::new(fileopt).file_name().unwrap();
-    let size = file.metadata().map(|x| x.len() as u32).ok();
+    let size = file.metadata().map(|x| x.len() as u32).unwrap();
     let mut port = stdinout::CombinedStdInOut::new();
     let mut state = zmodem2::State::new();
     while state.stage() != zmodem2::Stage::Done {

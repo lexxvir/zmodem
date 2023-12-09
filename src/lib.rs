@@ -16,9 +16,8 @@
 #[cfg(feature = "std")]
 mod std;
 
-use binrw::{io::Cursor, BinRead, BinReaderExt, NullString};
 use bitflags::bitflags;
-use core::convert::TryFrom;
+use core::{convert::TryFrom, str::FromStr};
 use crc::{Crc, CRC_16_XMODEM, CRC_32_ISO_HDLC};
 use heapless::String;
 use strum::IntoEnumIterator;
@@ -361,7 +360,8 @@ pub struct State {
     stage: Stage,
     count: u32,
     buf: Buffer,
-    file_name: [u8; 256],
+    file_name: String<256>,
+    file_size: u32,
 }
 
 impl Default for State {
@@ -376,12 +376,21 @@ impl State {
             stage: Stage::Waiting,
             count: 0,
             buf: Buffer::from_array_empty([0; BUFFER_SIZE]),
-            file_name: [0; 256],
+            file_name: String::new(),
+            file_size: 0,
         }
     }
 
     pub fn stage(&self) -> Stage {
         self.stage
+    }
+
+    pub fn file_name(&self) -> &str {
+        &self.file_name
+    }
+
+    pub fn file_size(&self) -> u32 {
+        self.file_size
     }
 }
 
@@ -399,7 +408,7 @@ pub fn send<P, F>(
     file: &mut F,
     state: &mut State,
     name: &str,
-    size: Option<u32>,
+    size: u32,
 ) -> core::result::Result<(), Error>
 where
     P: Read + Write,
@@ -421,7 +430,6 @@ where
     match frame.frame() {
         Frame::ZRINIT => match state.stage {
             Stage::Waiting => {
-                let size = size.unwrap_or(0);
                 write_zfile(port, &mut state.buf, name, size)?;
                 state.stage = Stage::Ready;
             }
@@ -548,13 +556,8 @@ where
     write_subpacket(port, Encoding::ZBIN32, Packet::ZCRCW, buf)
 }
 
-#[derive(BinRead)]
-#[br(assert(file_name.len() != 0))]
-struct ZfileReader {
-    file_name: NullString,
-}
-
-/// Parses filename and size from the payload of `Frame::ZFiLE`.
+/// Parses filename and size from the subpacket sent after the `Frame::ZFiLE`
+/// header.
 fn read_zfile<P>(
     port: &mut P,
     state: &mut State,
@@ -565,18 +568,20 @@ where
 {
     match read_subpacket(port, &mut state.buf, encoding) {
         Ok(_) => {
-            let reader: ZfileReader = Cursor::new(&mut state.buf).read_ne().or(Err(Error::Data))?;
-            if reader.file_name.len() > 255 {
-                return Err(Error::Data);
+            let payload = core::str::from_utf8(state.buf.as_slice()).or(Err(Error::Data))?;
+            for (i, field) in payload.split('\0').enumerate() {
+                if i == 0 {
+                    state.file_name = String::from_str(field).or(Err(Error::Data))?;
+                }
+                if i == 1 {
+                    if let Some(field) = field.split_ascii_whitespace().next() {
+                        state.file_size = u32::from_str(field).or(Err(Error::Data))?;
+                    }
+                }
             }
-            let mut name = [0; 256];
-            for (i, b) in reader.file_name.as_slice().iter().enumerate() {
-                name[i] = *b;
-            }
-            state.file_name = name;
             ZRPOS_HEADER.with_count(0).write(port)
         }
-        _ => ZNAK_HEADER.write(port).and(Err(Error::Data)),
+        _ => ZNAK_HEADER.write(port).or(Err(Error::Data)),
     }
 }
 

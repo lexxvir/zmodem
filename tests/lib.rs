@@ -88,7 +88,7 @@ fn send_to_rz() {
     let mut state = zmodem2::State::new();
 
     while state.stage() != zmodem2::Stage::Done {
-        assert!(zmodem2::send(&mut port, &mut file, &mut state, "send_to_rz", Some(len)) == Ok(()));
+        assert!(zmodem2::send(&mut port, &mut file, &mut state, "send_to_rz", len) == Ok(()));
     }
 
     sleep(Duration::from_millis(300));
@@ -125,13 +125,18 @@ fn lib_send_recv() {
         let outf = OpenOptions::new().write(true).open("test-fifo1").unwrap();
         let inf = File::open("test-fifo2").unwrap();
         let mut port = InOut::new(inf, outf);
-
-        let origin = TEST_DATA;
-        let mut file = Cursor::new(&origin);
-
+        let mut file = Cursor::new(TEST_DATA);
         let mut state = zmodem2::State::new();
         while state.stage() != zmodem2::Stage::Done {
-            assert!(zmodem2::send(&mut port, &mut file, &mut state, "test", None) == Ok(()));
+            assert!(
+                zmodem2::send(
+                    &mut port,
+                    &mut file,
+                    &mut state,
+                    "test",
+                    TEST_DATA.len() as u32
+                ) == Ok(())
+            );
         }
     });
 

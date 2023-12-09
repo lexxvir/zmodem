@@ -13,7 +13,6 @@ default = ["std"]
 std = []
 
 [dependencies]
-binrw = "0.13.3"
 bitflags = "2.4.1"
 crc = "3.0.1"
 heapless = "0.8.0"
