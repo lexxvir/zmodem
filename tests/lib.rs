@@ -86,7 +86,10 @@ fn send_to_rz() {
     sleep(Duration::from_millis(300));
 
     let mut state = zmodem::State::new();
-    assert!(zmodem::write(&mut port, &mut file, &mut state, "send_to_rz", Some(len)) == Ok(()));
+
+    while state.stage() != zmodem::Stage::Done {
+        assert!(zmodem::write(&mut port, &mut file, &mut state, "send_to_rz", Some(len)) == Ok(()));
+    }
 
     sleep(Duration::from_millis(300));
 
@@ -127,7 +130,9 @@ fn lib_send_recv() {
         let mut file = Cursor::new(&origin);
 
         let mut state = zmodem::State::new();
-        assert!(zmodem::write(&mut port, &mut file, &mut state, "test", None) == Ok(()));
+        while state.stage() != zmodem::Stage::Done {
+            assert!(zmodem::write(&mut port, &mut file, &mut state, "test", None) == Ok(()));
+        }
     });
 
     let mut file = Cursor::new(Vec::new());

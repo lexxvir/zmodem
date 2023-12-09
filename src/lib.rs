@@ -371,55 +371,52 @@ where
     P: Read + Write,
     F: Read + Seek,
 {
-    state.stage = Stage::Waiting;
-    ZRQINIT_HEADER.write(port)?;
-    loop {
-        if read_zpad(port).is_err() {
-            continue;
+    if state.stage == Stage::Waiting {
+        ZRQINIT_HEADER.write(port)?;
+    }
+    if read_zpad(port).is_err() {
+        return Ok(());
+    }
+    let frame = match Header::read(port) {
+        Err(_) => {
+            ZNAK_HEADER.write(port)?;
+            return Ok(());
         }
-        let frame = match Header::read(port) {
-            Err(_) => {
-                ZNAK_HEADER.write(port)?;
-                continue;
+        Ok(frame) => frame,
+    };
+    match frame.frame() {
+        Frame::ZRINIT => match state.stage {
+            Stage::Waiting => {
+                let size = size.unwrap_or(0);
+                write_zfile(port, &mut state.buf, name, size)?;
+                state.stage = Stage::Ready;
             }
-            Ok(frame) => frame,
-        };
-        match frame.frame() {
-            Frame::ZRINIT => match state.stage {
-                Stage::Waiting => {
-                    let size = size.unwrap_or(0);
-                    write_zfile(port, &mut state.buf, name, size)?;
-                    state.stage = Stage::Ready;
-                }
-                Stage::InProgress => ZFIN_HEADER.write(port)?,
-                Stage::Ready | Stage::Done => (),
-            },
-            Frame::ZRPOS | Frame::ZACK => match state.stage {
-                Stage::Waiting => ZRQINIT_HEADER.write(port)?,
-                Stage::Ready | Stage::InProgress => {
-                    write_zdata(port, &mut state.buf, file, frame.count())?;
-                    state.stage = Stage::InProgress;
-                }
-                Stage::Done => (),
-            },
-            Frame::ZFIN => match state.stage {
-                Stage::Waiting => ZRQINIT_HEADER.write(port)?,
-                Stage::InProgress => {
-                    port.write_byte(b'O')?;
-                    port.write_byte(b'O')?;
-                    state.stage = Stage::Done;
-                    break;
-                }
-                Stage::Ready | Stage::Done => (),
-            },
-            _ => {
-                if state.stage == Stage::Waiting {
-                    ZRQINIT_HEADER.write(port)?;
-                }
+            Stage::InProgress => ZFIN_HEADER.write(port)?,
+            Stage::Ready | Stage::Done => (),
+        },
+        Frame::ZRPOS | Frame::ZACK => match state.stage {
+            Stage::Waiting => ZRQINIT_HEADER.write(port)?,
+            Stage::Ready | Stage::InProgress => {
+                write_zdata(port, &mut state.buf, file, frame.count())?;
+                state.stage = Stage::InProgress;
+            }
+            Stage::Done => (),
+        },
+        Frame::ZFIN => match state.stage {
+            Stage::Waiting => ZRQINIT_HEADER.write(port)?,
+            Stage::InProgress => {
+                port.write_byte(b'O')?;
+                port.write_byte(b'O')?;
+                state.stage = Stage::Done;
+            }
+            Stage::Ready | Stage::Done => (),
+        },
+        _ => {
+            if state.stage == Stage::Waiting {
+                ZRQINIT_HEADER.write(port)?;
             }
         }
     }
-
     Ok(())
 }
 
@@ -484,7 +481,7 @@ where
             Stage::Waiting | Stage::Ready | Stage::Done => (),
         },
         _ => (),
-    };
+    }
     Ok(())
 }
 
