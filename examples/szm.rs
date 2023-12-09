@@ -1,5 +1,5 @@
 extern crate clap;
-extern crate zmodem;
+extern crate zmodem2;
 
 mod stdinout;
 
@@ -16,10 +16,10 @@ fn main() {
     let filename = Path::new(fileopt).file_name().unwrap();
     let size = file.metadata().map(|x| x.len() as u32).ok();
     let mut port = stdinout::CombinedStdInOut::new();
-    let mut state = zmodem::State::new();
-    while state.stage() != zmodem::Stage::Done {
+    let mut state = zmodem2::State::new();
+    while state.stage() != zmodem2::Stage::Done {
         assert!(
-            zmodem::write(
+            zmodem2::send(
                 &mut port,
                 &mut file,
                 &mut state,

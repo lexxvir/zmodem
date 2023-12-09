@@ -1,4 +1,4 @@
-extern crate zmodem;
+extern crate zmodem2;
 
 use std::fs::{remove_file, File, OpenOptions};
 use std::io::*;
@@ -52,10 +52,10 @@ fn recv_from_sz() {
     let child_stdout = sz.stdout.unwrap();
     let mut port = InOut::new(child_stdout, child_stdin);
     let mut file = Cursor::new(Vec::new());
-    let mut state = zmodem::State::new();
+    let mut state = zmodem2::State::new();
 
-    while state.stage() != zmodem::Stage::Done {
-        assert!(zmodem::read(&mut port, &mut file, &mut state) == Ok(()));
+    while state.stage() != zmodem2::Stage::Done {
+        assert!(zmodem2::receive(&mut port, &mut file, &mut state) == Ok(()));
     }
 
     sleep(Duration::from_millis(300));
@@ -85,10 +85,10 @@ fn send_to_rz() {
 
     sleep(Duration::from_millis(300));
 
-    let mut state = zmodem::State::new();
+    let mut state = zmodem2::State::new();
 
-    while state.stage() != zmodem::Stage::Done {
-        assert!(zmodem::write(&mut port, &mut file, &mut state, "send_to_rz", Some(len)) == Ok(()));
+    while state.stage() != zmodem2::Stage::Done {
+        assert!(zmodem2::send(&mut port, &mut file, &mut state, "send_to_rz", Some(len)) == Ok(()));
     }
 
     sleep(Duration::from_millis(300));
@@ -129,9 +129,9 @@ fn lib_send_recv() {
         let origin = TEST_DATA;
         let mut file = Cursor::new(&origin);
 
-        let mut state = zmodem::State::new();
-        while state.stage() != zmodem::Stage::Done {
-            assert!(zmodem::write(&mut port, &mut file, &mut state, "test", None) == Ok(()));
+        let mut state = zmodem2::State::new();
+        while state.stage() != zmodem2::Stage::Done {
+            assert!(zmodem2::send(&mut port, &mut file, &mut state, "test", None) == Ok(()));
         }
     });
 
@@ -141,9 +141,9 @@ fn lib_send_recv() {
     let outf = OpenOptions::new().write(true).open("test-fifo2").unwrap();
     let mut port = InOut::new(inf, outf);
 
-    let mut state = zmodem::State::new();
-    while state.stage() != zmodem::Stage::Done {
-        assert!(zmodem::read(&mut port, &mut file, &mut state) == Ok(()));
+    let mut state = zmodem2::State::new();
+    while state.stage() != zmodem2::Stage::Done {
+        assert!(zmodem2::receive(&mut port, &mut file, &mut state) == Ok(()));
     }
 
     let _ = remove_file("test-fifo1");

@@ -5,12 +5,8 @@ impl<W> Write for W
 where
     W: std::io::Write,
 {
-    fn write(&mut self, buf: &[u8]) -> Result<(), Error> {
+    fn write_all(&mut self, buf: &[u8]) -> Result<(), Error> {
         self.write_all(buf).or(Err(Error::Write))
-    }
-
-    fn write_byte(&mut self, value: u8) -> Result<(), Error> {
-        self.write_all(&[value]).or(Err(Error::Write))
     }
 }
 

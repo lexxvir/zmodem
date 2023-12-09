@@ -1,5 +1,16 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
-//! ZMODEM file transfer protocol
+//! ZMODEM file transfer protocol crate. `zmodem2::receive` and `zmodem2::send`
+//! provide a synchronous and sequential API for sending and receiving files
+//! with the ZMODEM protocol. Each step corresponds to a single ZMODEM frame
+//! transaction, and the state between the calls is kept in a `zmodem2::State`
+//! instance.
+//!
+//! The usage can be described in the high-level with the following flow:
+//!
+//! 1. Create `zmodem2::State`.
+//! 2. Call either `zmodem2::send` or `zmodem2::receive`.
+//! 3. If the returned `zmodem2::Stage` is not yet `zmodem2::Stage::Done`, go
+//!    back to step 2.
 
 #![cfg_attr(not(feature = "std"), no_std)]
 #[cfg(feature = "std")]
@@ -14,21 +25,6 @@ use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 use tinyvec::{array_vec, ArrayVec};
 
-const CRC16: Crc<u16> = Crc::<u16>::new(&CRC_16_XMODEM);
-const CRC32: Crc<u32> = Crc::<u32>::new(&CRC_32_ISO_HDLC);
-
-const ZPAD: u8 = b'*';
-const ZDLE: u8 = 0x18;
-const XON: u8 = 0x11;
-
-const ZACK_HEADER: Header = Header::new(Encoding::ZHEX, Frame::ZACK, &[0; 4]);
-const ZDATA_HEADER: Header = Header::new(Encoding::ZBIN32, Frame::ZDATA, &[0; 4]);
-const ZEOF_HEADER: Header = Header::new(Encoding::ZBIN32, Frame::ZEOF, &[0; 4]);
-const ZFIN_HEADER: Header = Header::new(Encoding::ZHEX, Frame::ZFIN, &[0; 4]);
-const ZNAK_HEADER: Header = Header::new(Encoding::ZHEX, Frame::ZNAK, &[0; 4]);
-const ZRPOS_HEADER: Header = Header::new(Encoding::ZHEX, Frame::ZRPOS, &[0; 4]);
-const ZRQINIT_HEADER: Header = Header::new(Encoding::ZHEX, Frame::ZRQINIT, &[0; 4]);
-
 /// Size of the unescaped subpacket payload. The size was picked based on
 /// maximum subpacket size in the original 1988 ZMODEM specification.
 const BUFFER_SIZE: usize = 1024;
@@ -39,7 +35,13 @@ const HEADER_SIZE: usize = 32;
 /// The number of subpackets to stream
 const SUBPACKET_PER_ACK: usize = 10;
 
-/// https://play.rust-lang.org/?version=stable&mode=debug&edition=2021&gist=20db24d9f0aaff4d13f0144416f34d46
+/// CRC algorithm for `ZBIN` or `ZHEX` encoded transmissions.
+const CRC16: Crc<u16> = Crc::<u16>::new(&CRC_16_XMODEM);
+
+/// CRC algorithm for `ZBIN32` encoded transmissions.
+const CRC32: Crc<u32> = Crc::<u32>::new(&CRC_32_ISO_HDLC);
+
+/// <https://play.rust-lang.org/?version=stable&mode=debug&edition=2021&gist=20db24d9f0aaff4d13f0144416f34d46>
 const ZDLE_TABLE: [u8; 0x100] = [
     0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x4d, 0x0e, 0x0f,
     0x50, 0x51, 0x12, 0x53, 0x14, 0x15, 0x16, 0x17, 0x58, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f,
@@ -59,8 +61,8 @@ const ZDLE_TABLE: [u8; 0x100] = [
     0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa, 0xfb, 0xfc, 0xfd, 0xfe, 0x6d,
 ];
 
-/// https://play.rust-lang.org/?version=stable&mode=debug&edition=2021&gist=20db24d9f0aaff4d13f0144416f34d46
-pub const UNZDLE_TABLE: [u8; 0x100] = [
+/// <https://play.rust-lang.org/?version=stable&mode=debug&edition=2021&gist=20db24d9f0aaff4d13f0144416f34d46>
+const UNZDLE_TABLE: [u8; 0x100] = [
     0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
     0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f,
     0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2a, 0x2b, 0x2c, 0x2d, 0x2e, 0x2f,
@@ -79,30 +81,51 @@ pub const UNZDLE_TABLE: [u8; 0x100] = [
     0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa, 0xfb, 0xfc, 0xfd, 0xfe, 0xff,
 ];
 
-/// Buffer for the escaped data
+const ZPAD: u8 = b'*';
+const ZDLE: u8 = 0x18;
+const XON: u8 = 0x11;
+const ZACK_HEADER: Header = Header::new(Encoding::ZHEX, Frame::ZACK, &[0; 4]);
+const ZDATA_HEADER: Header = Header::new(Encoding::ZBIN32, Frame::ZDATA, &[0; 4]);
+const ZEOF_HEADER: Header = Header::new(Encoding::ZBIN32, Frame::ZEOF, &[0; 4]);
+const ZFIN_HEADER: Header = Header::new(Encoding::ZHEX, Frame::ZFIN, &[0; 4]);
+const ZNAK_HEADER: Header = Header::new(Encoding::ZHEX, Frame::ZNAK, &[0; 4]);
+const ZRPOS_HEADER: Header = Header::new(Encoding::ZHEX, Frame::ZRPOS, &[0; 4]);
+const ZRQINIT_HEADER: Header = Header::new(Encoding::ZHEX, Frame::ZRQINIT, &[0; 4]);
+
+/// Staging and temporal storage for incoming and outgoing frames
 type Buffer = ArrayVec<[u8; BUFFER_SIZE]>;
 
+/// Error codes for `zmodem2::send` and `zmodem2::receive`
 #[derive(PartialEq)]
 pub enum Error {
+    /// The received data failed validation
     Data,
+    /// I/O error during read
     Read,
+    /// I/o error during write
     Write,
 }
 
+/// Write operations
 pub trait Write {
-    fn write(&mut self, buf: &[u8]) -> Result<(), Error>;
-    fn write_byte(&mut self, value: u8) -> Result<(), Error>;
+    fn write_all(&mut self, buf: &[u8]) -> Result<(), Error>;
+    fn write_byte(&mut self, value: u8) -> Result<(), Error> {
+        self.write_all(&[value])
+    }
 }
 
+/// Read operations
 pub trait Read {
     fn read(&mut self, buf: &mut [u8]) -> Result<u32, Error>;
     fn read_byte(&mut self) -> Result<u8, Error>;
 }
 
+/// Seek operations
 pub trait Seek {
     fn seek(&mut self, offset: u32) -> Result<(), Error>;
 }
 
+/// The ZMODEM protocol header
 #[repr(C)]
 #[derive(PartialEq)]
 pub struct Header {
@@ -202,10 +225,10 @@ impl Header {
     }
 }
 
+/// The ZMODEM protocol frame encoding
 #[repr(u8)]
 #[allow(clippy::upper_case_acronyms)]
 #[derive(Clone, Copy, EnumIter, PartialEq)]
-/// Frame encodings
 pub enum Encoding {
     ZBIN = 0x41,
     ZHEX = 0x42,
@@ -281,7 +304,7 @@ impl TryFrom<u8> for Frame {
 
 bitflags! {
    /// `ZRINIT` flags
-   pub struct Zrinit: u8 {
+   struct Zrinit: u8 {
         /// Can send and receive in full-duplex
         const CANFDX = 0x01;
         /// Can receive data in parallel with disk I/O
@@ -302,14 +325,14 @@ bitflags! {
 }
 
 #[derive(PartialEq)]
-pub struct File {
+struct File {
     name: [u8; 256],
 }
 
+/// The ZMODEM protocol subpacket type
 #[repr(u8)]
 #[allow(clippy::upper_case_acronyms)]
 #[derive(Clone, Copy, EnumIter, PartialEq)]
-/// The ZMODEM subpacket type
 pub enum Packet {
     ZCRCE = 0x68,
     ZCRCG = 0x69,
@@ -327,6 +350,7 @@ impl TryFrom<u8> for Packet {
     }
 }
 
+/// Send or receive transmission state
 pub struct State {
     stage: Stage,
     file: Option<File>,
@@ -364,7 +388,7 @@ pub enum Stage {
 }
 
 /// Sends a file using the ZMODEM file transfer protocol.
-pub fn write<P, F>(
+pub fn send<P, F>(
     port: &mut P,
     file: &mut F,
     state: &mut State,
@@ -425,7 +449,11 @@ where
 }
 
 /// Receives a file using the ZMODEM file transfer protocol.
-pub fn read<P, F>(port: &mut P, file: &mut F, state: &mut State) -> core::result::Result<(), Error>
+pub fn receive<P, F>(
+    port: &mut P,
+    file: &mut F,
+    state: &mut State,
+) -> core::result::Result<(), Error>
 where
     P: Read + Write,
     F: Write,
@@ -613,7 +641,7 @@ where
             }
             Err(err) => return Err(err),
         };
-        file.write(&state.buf)?;
+        file.write_all(&state.buf)?;
         state.count += state.buf.len() as u32;
         match zcrc {
             Packet::ZCRCW => {

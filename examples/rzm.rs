@@ -1,5 +1,5 @@
 extern crate clap;
-extern crate zmodem;
+extern crate zmodem2;
 
 mod stdinout;
 
@@ -18,8 +18,8 @@ fn main() {
         File::create(filename).unwrap_or_else(|_| panic!("Cannot create file {:?}:", filename));
 
     let mut port = stdinout::CombinedStdInOut::new();
-    let mut state = zmodem::State::new();
-    while state.stage() != zmodem::Stage::Done {
-        assert!(zmodem::read(&mut port, &mut file, &mut state) == Ok(()));
+    let mut state = zmodem2::State::new();
+    while state.stage() != zmodem2::Stage::Done {
+        assert!(zmodem2::receive(&mut port, &mut file, &mut state) == Ok(()));
     }
 }

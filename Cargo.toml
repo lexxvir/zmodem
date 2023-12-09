@@ -1,6 +1,8 @@
 [package]
-authors = ["aarbuzov"]
-name = "zmodem"
+authors = ["jarkkojs", "aarbuzov"]
+name = "zmodem2"
+description = "ZMODEM file transfer protocol"
+repository = "https://github.com/rust-lang/cargo/"
 license = "MIT OR Apache-2.0"
 version = "0.1.0"
 edition = "2021"
