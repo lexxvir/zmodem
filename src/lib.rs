@@ -10,6 +10,8 @@ use bitflags::bitflags;
 use core::convert::TryFrom;
 use crc::{Crc, CRC_16_XMODEM, CRC_32_ISO_HDLC};
 use heapless::String;
+use strum::IntoEnumIterator;
+use strum_macros::EnumIter;
 use tinyvec::{array_vec, ArrayVec};
 
 const CRC16: Crc<u16> = Crc::<u16>::new(&CRC_16_XMODEM);
@@ -198,7 +200,7 @@ impl Header {
 
 #[repr(u8)]
 #[allow(clippy::upper_case_acronyms)]
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, EnumIter, PartialEq)]
 /// Frame encodings
 pub enum Encoding {
     ZBIN = 0x41,
@@ -206,22 +208,19 @@ pub enum Encoding {
     ZBIN32 = 0x43,
 }
 
-const ENCODINGS: &[Encoding] = &[Encoding::ZBIN, Encoding::ZHEX, Encoding::ZBIN32];
-
 impl TryFrom<u8> for Encoding {
     type Error = InvalidData;
 
     fn try_from(value: u8) -> Result<Self, Self::Error> {
-        ENCODINGS
-            .iter()
-            .find(|e| value == **e as u8)
-            .map_or(Err(InvalidData), |e| Ok(*e))
+        Encoding::iter()
+            .find(|e| value == *e as u8)
+            .map_or(Err(InvalidData), Ok)
     }
 }
 
 #[repr(u8)]
 #[allow(clippy::upper_case_acronyms)]
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, EnumIter, PartialEq)]
 /// Frame types
 pub enum Frame {
     /// Request receive init
@@ -266,37 +265,13 @@ pub enum Frame {
     ZSTDERR = 19,
 }
 
-const FRAMES: &[Frame] = &[
-    Frame::ZRQINIT,
-    Frame::ZRINIT,
-    Frame::ZSINIT,
-    Frame::ZACK,
-    Frame::ZFILE,
-    Frame::ZSKIP,
-    Frame::ZNAK,
-    Frame::ZABORT,
-    Frame::ZFIN,
-    Frame::ZRPOS,
-    Frame::ZDATA,
-    Frame::ZEOF,
-    Frame::ZFERR,
-    Frame::ZCRC,
-    Frame::ZCHALLENGE,
-    Frame::ZCOMPL,
-    Frame::ZCAN,
-    Frame::ZFREECNT,
-    Frame::ZCOMMAND,
-    Frame::ZSTDERR,
-];
-
 impl TryFrom<u8> for Frame {
     type Error = InvalidData;
 
     fn try_from(value: u8) -> Result<Self, Self::Error> {
-        FRAMES
-            .iter()
-            .find(|t| value == **t as u8)
-            .map_or(Err(InvalidData), |t| Ok(*t))
+        Frame::iter()
+            .find(|t| value == *t as u8)
+            .map_or(Err(InvalidData), Ok)
     }
 }
 
@@ -329,7 +304,7 @@ pub struct File {
 
 #[repr(u8)]
 #[allow(clippy::upper_case_acronyms)]
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, EnumIter, PartialEq)]
 /// The ZMODEM subpacket type
 pub enum Packet {
     ZCRCE = 0x68,
@@ -338,16 +313,13 @@ pub enum Packet {
     ZCRCW = 0x6b,
 }
 
-const PACKETS: &[Packet] = &[Packet::ZCRCE, Packet::ZCRCG, Packet::ZCRCQ, Packet::ZCRCW];
-
 impl TryFrom<u8> for Packet {
     type Error = InvalidData;
 
     fn try_from(value: u8) -> Result<Self, Self::Error> {
-        PACKETS
-            .iter()
-            .find(|e| value == **e as u8)
-            .map_or(Err(InvalidData), |e| Ok(*e))
+        Packet::iter()
+            .find(|e| value == *e as u8)
+            .map_or(Err(InvalidData), Ok)
     }
 }
 
