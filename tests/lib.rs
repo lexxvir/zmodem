@@ -1,7 +1,4 @@
 extern crate zmodem;
-#[macro_use]
-extern crate lazy_static;
-extern crate rand;
 
 use std::fs::{remove_file, File, OpenOptions};
 use std::io::*;
@@ -36,21 +33,13 @@ impl<R: Read, W: Write> Write for InOut<R, W> {
     }
 }
 
-lazy_static! {
-    static ref RND_VALUES: Vec<u8> = {
-        use rand::Rng;
-        let mut rng = rand::thread_rng();
-        let mut buf = vec![0; 1024 * 1024 * 11];
-        rng.fill_bytes(&mut buf);
-        buf
-    };
-}
+const TEST_DATA: &[u8] = include_bytes!("test.bin");
 
 #[test]
 #[cfg(unix)]
 fn recv_from_sz() {
     let mut f = File::create("recv_from_sz").unwrap();
-    f.write_all(&RND_VALUES).unwrap();
+    f.write_all(&TEST_DATA).unwrap();
 
     let sz = Command::new("sz")
         .arg("recv_from_sz")
@@ -73,7 +62,7 @@ fn recv_from_sz() {
     sleep(Duration::from_millis(300));
     remove_file("recv_from_sz").unwrap();
 
-    assert_eq!(RND_VALUES.clone(), c.into_inner());
+    assert_eq!(TEST_DATA, c.into_inner());
 }
 
 #[test]
@@ -91,8 +80,8 @@ fn send_to_rz() {
     let child_stdout = sz.stdout.unwrap();
     let mut inout = InOut::new(child_stdout, child_stdin);
 
-    let len = RND_VALUES.len() as u32;
-    let copy = RND_VALUES.clone();
+    let len = TEST_DATA.len() as u32;
+    let copy = TEST_DATA;
     let mut cur = Cursor::new(&copy);
 
     sleep(Duration::from_millis(300));
@@ -134,7 +123,7 @@ fn lib_send_recv() {
         let inf = File::open("test-fifo2").unwrap();
         let mut inout = InOut::new(inf, outf);
 
-        let origin = RND_VALUES.clone();
+        let origin = TEST_DATA;
         let mut c = Cursor::new(&origin);
 
         assert!(zmodem::write(&mut inout, &mut c, "test", None) == Ok(()));
@@ -154,5 +143,5 @@ fn lib_send_recv() {
     let _ = remove_file("test-fifo1");
     let _ = remove_file("test-fifo2");
 
-    assert_eq!(RND_VALUES.clone(), c.into_inner());
+    assert_eq!(TEST_DATA, c.into_inner());
 }
