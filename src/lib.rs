@@ -355,7 +355,7 @@ impl State {
 pub enum Stage {
     Waiting,
     Ready,
-    Receiving,
+    InProgress,
     Done,
 }
 
@@ -391,24 +391,30 @@ where
                     write_zfile(port, &mut state.buf, name, size)?;
                     state.stage = Stage::Ready;
                 }
-                Stage::Receiving => ZFIN_HEADER.write(port)?,
-                _ => (),
+                Stage::InProgress => ZFIN_HEADER.write(port)?,
+                Stage::Ready | Stage::Done => (),
             },
-            Frame::ZRPOS | Frame::ZACK => {
-                if state.stage == Stage::Waiting {
-                    ZRQINIT_HEADER.write(port)?;
-                } else {
+            Frame::ZRPOS | Frame::ZACK => match state.stage {
+                Stage::Waiting => ZRQINIT_HEADER.write(port)?,
+                Stage::Ready | Stage::InProgress => {
                     write_zdata(port, &mut state.buf, file, frame.count())?;
-                    state.stage = Stage::Receiving;
+                    state.stage = Stage::InProgress;
                 }
-            }
+                Stage::Done => (),
+            },
+            Frame::ZFIN => match state.stage {
+                Stage::Waiting => ZRQINIT_HEADER.write(port)?,
+                Stage::InProgress => {
+                    port.write_byte(b'O')?;
+                    port.write_byte(b'O')?;
+                    state.stage = Stage::Done;
+                    break;
+                }
+                Stage::Ready | Stage::Done => (),
+            },
             _ => {
                 if state.stage == Stage::Waiting {
                     ZRQINIT_HEADER.write(port)?;
-                } else {
-                    port.write_byte(b'O')?;
-                    port.write_byte(b'O')?;
-                    break;
                 }
             }
         }
@@ -442,40 +448,41 @@ where
         Ok(header) => header,
     };
     match header.frame() {
-        Frame::ZFILE => {
-            if state.stage != Stage::Waiting && state.stage != Stage::Ready {
-                return Ok(());
+        Frame::ZFILE => match state.stage {
+            Stage::Waiting | Stage::Ready => {
+                assert_eq!(state.count, 0);
+                state.file = read_zfile(port, state, header.encoding())?;
+                state.stage = Stage::Ready;
             }
-            assert_eq!(state.count, 0);
-            state.file = read_zfile(port, state, header.encoding())?;
-            state.stage = Stage::Ready;
-        }
-        Frame::ZDATA => {
-            if state.stage == Stage::Waiting {
-                write_zrinit(port)?;
-                return Ok(());
+            Stage::InProgress | Stage::Done => (),
+        },
+        Frame::ZDATA => match state.stage {
+            Stage::Waiting => write_zrinit(port)?,
+            Stage::Ready | Stage::InProgress => {
+                if header.count() != state.count {
+                    ZRPOS_HEADER.with_count(state.count).write(port)?;
+                    return Ok(());
+                }
+                read_zdata(port, state, header.encoding(), file)?;
+                state.stage = Stage::InProgress;
             }
-            if header.count() != state.count {
-                ZRPOS_HEADER.with_count(state.count).write(port)?;
-                return Ok(());
+            Stage::Done => (),
+        },
+        Frame::ZEOF => match state.stage {
+            Stage::InProgress => {
+                if header.count() == state.count {
+                    write_zrinit(port)?
+                }
             }
-            read_zdata(port, state, header.encoding(), file)?;
-            state.stage = Stage::Receiving;
-        }
-        Frame::ZEOF => {
-            if state.stage != Stage::Receiving || header.count() != state.count {
-                return Ok(());
+            Stage::Waiting | Stage::Ready | Stage::Done => (),
+        },
+        Frame::ZFIN => match state.stage {
+            Stage::InProgress => {
+                ZFIN_HEADER.write(port)?;
+                state.stage = Stage::Done;
             }
-            write_zrinit(port)?;
-        }
-        Frame::ZFIN => {
-            if state.stage != Stage::Receiving {
-                return Ok(());
-            }
-            ZFIN_HEADER.write(port)?;
-            state.stage = Stage::Done;
-        }
-        _ if state.file.is_none() => write_zrinit(port)?,
+            Stage::Waiting | Stage::Ready | Stage::Done => (),
+        },
         _ => (),
     };
     Ok(())
