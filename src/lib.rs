@@ -102,11 +102,11 @@ pub enum Error {
     Data,
     /// I/O error during read
     Read,
-    /// I/o error during write
+    /// I/O error during write
     Write,
 }
 
-/// Write operations
+/// Write I/O operations
 pub trait Write {
     fn write_all(&mut self, buf: &[u8]) -> Result<(), Error>;
     fn write_byte(&mut self, value: u8) -> Result<(), Error> {
@@ -114,18 +114,19 @@ pub trait Write {
     }
 }
 
-/// Read operations
+/// Read I/O operations
 pub trait Read {
     fn read(&mut self, buf: &mut [u8]) -> Result<u32, Error>;
     fn read_byte(&mut self) -> Result<u8, Error>;
 }
 
-/// Seek operations
+/// Seek I/O operations
 pub trait Seek {
     fn seek(&mut self, offset: u32) -> Result<(), Error>;
 }
 
-/// The ZMODEM protocol header
+/// Data structure for holding a ZMODEM protocol header, which begins a frame,
+/// and is followed optionally by a variable number of subpackets.
 #[repr(C)]
 #[derive(PartialEq)]
 pub struct Header {
@@ -135,6 +136,7 @@ pub struct Header {
 }
 
 impl Header {
+    /// Creates a new instance
     pub const fn new(encoding: Encoding, frame: Frame, flags: &[u8; 4]) -> Self {
         Self {
             encoding,
@@ -143,18 +145,22 @@ impl Header {
         }
     }
 
+    /// Returns `Encoding` of the frame
     pub const fn encoding(&self) -> Encoding {
         self.encoding
     }
 
+    /// Returns `Frame`, containing the frame type
     pub const fn frame(&self) -> Frame {
         self.frame
     }
 
+    /// Returns count for the frame types using this field
     pub const fn count(&self) -> u32 {
         u32::from_le_bytes(self.flags)
     }
 
+    /// Encodes and writes the header to the I/O port
     pub fn write<P>(&self, port: &mut P) -> core::result::Result<(), Error>
     where
         P: Write,
@@ -190,6 +196,8 @@ impl Header {
         Ok(())
     }
 
+    /// Reads and decodes a header from the I/O port, and return a new
+    /// instance
     pub fn read<P>(port: &mut P) -> core::result::Result<Header, Error>
     where
         P: Read,
@@ -210,10 +218,13 @@ impl Header {
         Ok(header)
     }
 
+    /// Returns a new instance with the flags substitude with a count
+    /// for the frame types using this field.
     pub const fn with_count(&self, count: u32) -> Self {
         Header::new(self.encoding, self.frame, &count.to_le_bytes())
     }
 
+    /// Returns the serialized size of the header before escaping
     const fn unescaped_size(encoding: Encoding) -> usize {
         match encoding {
             Encoding::ZBIN => core::mem::size_of::<Header>() + 2,
