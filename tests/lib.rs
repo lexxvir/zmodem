@@ -55,7 +55,8 @@ fn recv_from_sz() {
     let mut c = Cursor::new(Vec::new());
 
     let mut state = zmodem::State::new();
-    while state.frame() != Some(zmodem::Frame::ZFIN) {
+
+    while state.stage() != zmodem::Stage::Done {
         assert!(zmodem::read(&mut inout, &mut state, &mut c) == Ok(()));
     }
 
@@ -136,7 +137,7 @@ fn lib_send_recv() {
     let mut inout = InOut::new(inf, outf);
 
     let mut state = zmodem::State::new();
-    while state.frame() != Some(zmodem::Frame::ZFIN) {
+    while state.stage() != zmodem::Stage::Done {
         assert!(zmodem::read(&mut inout, &mut state, &mut c) == Ok(()));
     }
 

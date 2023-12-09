@@ -439,7 +439,7 @@ impl Display for Packet {
 }
 
 pub struct State {
-    frame: Option<Frame>,
+    stage: Stage,
     file: Option<File>,
     count: u32,
     buf: Buffer,
@@ -454,24 +454,24 @@ impl Default for State {
 impl State {
     pub const fn new() -> Self {
         State {
-            frame: None,
+            stage: Stage::Waiting,
             file: None,
             count: 0,
             buf: Buffer::from_array_empty([0; PAYLOAD_SIZE]),
         }
     }
 
-    pub fn frame(&self) -> Option<Frame> {
-        self.frame
+    pub fn stage(&self) -> Stage {
+        self.stage
     }
 }
 
-// TODO: Use `State` instead.
-#[derive(PartialEq)]
-enum Stage {
+#[derive(Clone, Copy, PartialEq)]
+pub enum Stage {
     Waiting,
     Ready,
     Receiving,
+    Done,
 }
 
 /// Sends a file using the ZMODEM file transfer protocol.
@@ -506,8 +506,8 @@ where
                     write_zfile(port, &mut buf, name, size)?;
                     stage = Stage::Ready;
                 }
-                Stage::Ready => (),
                 Stage::Receiving => ZFIN_HEADER.write(port)?,
+                _ => (),
             },
             Frame::ZRPOS | Frame::ZACK => {
                 if stage == Stage::Waiting {
@@ -542,7 +542,7 @@ where
     P: PortRead + PortWrite,
     F: FileWrite,
 {
-    if state.frame.is_none() {
+    if state.stage == Stage::Waiting {
         assert!(state.file.is_none() && state.count == 0);
         write_zrinit(port)?
     }
@@ -558,15 +558,15 @@ where
     };
     match header.frame() {
         Frame::ZFILE => {
-            if state.frame.is_some() && state.frame != Some(Frame::ZFILE) {
+            if state.stage != Stage::Waiting && state.stage != Stage::Ready {
                 return Ok(());
             }
             assert_eq!(state.count, 0);
             state.file = read_zfile(port, state, header.encoding())?;
-            state.frame = Some(Frame::ZFILE);
+            state.stage = Stage::Ready;
         }
         Frame::ZDATA => {
-            if state.frame.is_none() {
+            if state.stage == Stage::Waiting {
                 write_zrinit(port)?;
                 return Ok(());
             }
@@ -575,21 +575,20 @@ where
                 return Ok(());
             }
             read_zdata(port, state, header.encoding(), file)?;
-            state.frame = Some(Frame::ZDATA);
+            state.stage = Stage::Receiving;
         }
         Frame::ZEOF => {
-            if state.frame != Some(Frame::ZDATA) || header.count() != state.count {
+            if state.stage != Stage::Receiving || header.count() != state.count {
                 return Ok(());
             }
             write_zrinit(port)?;
-            state.frame = Some(Frame::ZEOF);
         }
         Frame::ZFIN => {
-            if state.frame != Some(Frame::ZEOF) {
+            if state.stage != Stage::Receiving {
                 return Ok(());
             }
             ZFIN_HEADER.write(port)?;
-            state.frame = Some(Frame::ZFIN);
+            state.stage = Stage::Done;
         }
         _ if state.file.is_none() => write_zrinit(port)?,
         _ => (),
