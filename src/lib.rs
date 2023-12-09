@@ -359,9 +359,9 @@ impl TryFrom<u8> for Packet {
 pub struct State {
     stage: Stage,
     count: u32,
-    buf: Buffer,
     file_name: String<256>,
     file_size: u32,
+    buf: Buffer,
 }
 
 impl Default for State {
@@ -375,14 +375,18 @@ impl State {
         State {
             stage: Stage::Waiting,
             count: 0,
-            buf: Buffer::from_array_empty([0; BUFFER_SIZE]),
             file_name: String::new(),
             file_size: 0,
+            buf: Buffer::from_array_empty([0; BUFFER_SIZE]),
         }
     }
 
     pub fn stage(&self) -> Stage {
         self.stage
+    }
+
+    pub fn count(&self) -> u32 {
+        self.count
     }
 
     pub fn file_name(&self) -> &str {

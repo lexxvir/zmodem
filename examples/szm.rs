@@ -3,17 +3,23 @@ extern crate zmodem2;
 
 mod stdinout;
 
-use clap::{App, Arg};
+use clap::Parser;
 use std::fs::File;
 use std::path::Path;
 
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+#[command(about = "Receive a ZMODEM file transfer", long_about = None)]
+pub struct Arguments {
+    /// Filename
+    #[arg(short, long)]
+    pub file_name: String,
+}
+
 fn main() {
-    let matches = App::new("Pure Rust implementation of sz utility")
-        .arg(Arg::with_name("file").required(true).index(1))
-        .get_matches();
-    let fileopt = matches.value_of("file").unwrap();
-    let mut file = File::open(fileopt).unwrap();
-    let filename = Path::new(fileopt).file_name().unwrap();
+    let args = Arguments::parse();
+    let mut file = File::open(&args.file_name).unwrap();
+    let filename = Path::new(&args.file_name).file_name().unwrap();
     let size = file.metadata().map(|x| x.len() as u32).unwrap();
     let mut port = stdinout::CombinedStdInOut::new();
     let mut state = zmodem2::State::new();
