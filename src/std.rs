@@ -1,16 +1,16 @@
-use super::{Encoding, Frame, Header, InvalidData, Packet, Read, Seek, Write};
+use super::{Encoding, Error, Frame, Header, Packet, Read, Seek, Write};
 use std::{fmt, io::SeekFrom};
 
 impl<W> Write for W
 where
     W: std::io::Write,
 {
-    fn write(&mut self, buf: &[u8]) -> Result<(), InvalidData> {
-        self.write_all(buf).or(Err(InvalidData))
+    fn write(&mut self, buf: &[u8]) -> Result<(), Error> {
+        self.write_all(buf).or(Err(Error::Write))
     }
 
-    fn write_byte(&mut self, value: u8) -> Result<(), InvalidData> {
-        self.write_all(&[value]).or(Err(InvalidData))
+    fn write_byte(&mut self, value: u8) -> Result<(), Error> {
+        self.write_all(&[value]).or(Err(Error::Write))
     }
 }
 
@@ -18,15 +18,15 @@ impl<R> Read for R
 where
     R: std::io::Read,
 {
-    fn read(&mut self, buf: &mut [u8]) -> Result<u32, InvalidData> {
-        Ok(self.read(buf).or(Err(InvalidData))? as u32)
+    fn read(&mut self, buf: &mut [u8]) -> Result<u32, Error> {
+        Ok(self.read(buf).or(Err(Error::Read))? as u32)
     }
 
-    fn read_byte(&mut self) -> Result<u8, InvalidData> {
+    fn read_byte(&mut self) -> Result<u8, Error> {
         let mut buf = [0; 1];
         self.read_exact(&mut buf)
             .map(|_| buf[0])
-            .or(Err(InvalidData))
+            .or(Err(Error::Read))
     }
 }
 
@@ -34,12 +34,12 @@ impl<S> Seek for S
 where
     S: std::io::Seek,
 {
-    fn seek(&mut self, offset: u32) -> Result<(), InvalidData> {
+    fn seek(&mut self, offset: u32) -> Result<(), Error> {
         let new_offset = self
             .seek(SeekFrom::Start(offset as u64))
-            .or(Err(InvalidData))? as u32;
+            .or(Err(Error::Data))? as u32;
         if offset != new_offset {
-            return Err(InvalidData);
+            return Err(Error::Read);
         }
         Ok(())
     }
