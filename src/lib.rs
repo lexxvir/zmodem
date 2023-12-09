@@ -3,16 +3,14 @@
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
+#[cfg(feature = "std")]
+mod std;
+
 use binrw::{io::Cursor, BinRead, BinReaderExt, NullString};
 use bitflags::bitflags;
 use core::convert::TryFrom;
 use crc::{Crc, CRC_16_XMODEM, CRC_32_ISO_HDLC};
 use heapless::String;
-#[cfg(feature = "std")]
-use std::{
-    fmt::{self, Display},
-    io::SeekFrom,
-};
 use tinyvec::{array_vec, ArrayVec};
 
 const CRC16: Crc<u16> = Crc::<u16>::new(&CRC_16_XMODEM);
@@ -98,53 +96,6 @@ pub trait Read {
 
 pub trait Seek {
     fn seek(&mut self, offset: u32) -> Result<(), InvalidData>;
-}
-
-#[cfg(feature = "std")]
-impl<W> Write for W
-where
-    W: std::io::Write,
-{
-    fn write(&mut self, buf: &[u8]) -> Result<(), InvalidData> {
-        self.write_all(buf).or(Err(InvalidData))
-    }
-
-    fn write_byte(&mut self, value: u8) -> Result<(), InvalidData> {
-        self.write_all(&[value]).or(Err(InvalidData))
-    }
-}
-
-#[cfg(feature = "std")]
-impl<R> Read for R
-where
-    R: std::io::Read,
-{
-    fn read(&mut self, buf: &mut [u8]) -> Result<u32, InvalidData> {
-        Ok(self.read(buf).or(Err(InvalidData))? as u32)
-    }
-
-    fn read_byte(&mut self) -> Result<u8, InvalidData> {
-        let mut buf = [0; 1];
-        self.read_exact(&mut buf)
-            .map(|_| buf[0])
-            .or(Err(InvalidData))
-    }
-}
-
-#[cfg(feature = "std")]
-impl<S> Seek for S
-where
-    S: std::io::Seek,
-{
-    fn seek(&mut self, offset: u32) -> Result<(), InvalidData> {
-        let new_offset = self
-            .seek(SeekFrom::Start(offset as u64))
-            .or(Err(InvalidData))? as u32;
-        if offset != new_offset {
-            return Err(InvalidData);
-        }
-        Ok(())
-    }
 }
 
 #[repr(C)]
@@ -246,13 +197,6 @@ impl Header {
     }
 }
 
-#[cfg(feature = "std")]
-impl fmt::Display for Header {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{:8} {}", self.encoding, self.frame)
-    }
-}
-
 #[repr(u8)]
 #[allow(clippy::upper_case_acronyms)]
 #[derive(Clone, Copy, PartialEq)]
@@ -273,13 +217,6 @@ impl TryFrom<u8> for Encoding {
             .iter()
             .find(|e| value == **e as u8)
             .map_or(Err(InvalidData), |e| Ok(*e))
-    }
-}
-
-#[cfg(feature = "std")]
-impl Display for Encoding {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{:#02x}", *self as u8)
     }
 }
 
@@ -364,13 +301,6 @@ impl TryFrom<u8> for Frame {
     }
 }
 
-#[cfg(feature = "std")]
-impl Display for Frame {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{:#02x}", *self as u8)
-    }
-}
-
 bitflags! {
    /// `ZRINIT` flags
    pub struct Zrinit: u8 {
@@ -419,13 +349,6 @@ impl TryFrom<u8> for Packet {
             .iter()
             .find(|e| value == **e as u8)
             .map_or(Err(InvalidData), |e| Ok(*e))
-    }
-}
-
-#[cfg(feature = "std")]
-impl Display for Packet {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{:#02x}", *self as u8)
     }
 }
 
