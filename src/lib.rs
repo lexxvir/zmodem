@@ -11,7 +11,7 @@ use heapless::String;
 #[cfg(feature = "std")]
 use std::{
     fmt::{self, Display},
-    io::{Read, Seek, SeekFrom, Write},
+    io::SeekFrom,
 };
 use tinyvec::{array_vec, ArrayVec};
 
@@ -86,54 +86,43 @@ pub const UNZDLE_TABLE: [u8; 0x100] = [
 #[derive(PartialEq)]
 pub struct InvalidData;
 
-pub trait FileRead {
+pub trait Write {
+    fn write(&mut self, buf: &[u8]) -> Result<(), InvalidData>;
+    fn write_byte(&mut self, value: u8) -> Result<(), InvalidData>;
+}
+
+pub trait Read {
     fn read(&mut self, buf: &mut [u8]) -> Result<u32, InvalidData>;
+    fn read_byte(&mut self) -> Result<u8, InvalidData>;
+}
+
+pub trait Seek {
     fn seek(&mut self, offset: u32) -> Result<(), InvalidData>;
 }
 
 #[cfg(feature = "std")]
-impl<R> FileRead for R
+impl<W> Write for W
 where
-    R: Read + Seek,
+    W: std::io::Write,
+{
+    fn write(&mut self, buf: &[u8]) -> Result<(), InvalidData> {
+        self.write_all(buf).or(Err(InvalidData))
+    }
+
+    fn write_byte(&mut self, value: u8) -> Result<(), InvalidData> {
+        self.write_all(&[value]).or(Err(InvalidData))
+    }
+}
+
+#[cfg(feature = "std")]
+impl<R> Read for R
+where
+    R: std::io::Read,
 {
     fn read(&mut self, buf: &mut [u8]) -> Result<u32, InvalidData> {
         Ok(self.read(buf).or(Err(InvalidData))? as u32)
     }
 
-    fn seek(&mut self, offset: u32) -> Result<(), InvalidData> {
-        let new_offset = self
-            .seek(SeekFrom::Start(offset as u64))
-            .or(Err(InvalidData))? as u32;
-        if offset != new_offset {
-            return Err(InvalidData);
-        }
-        Ok(())
-    }
-}
-
-pub trait FileWrite {
-    fn write(&mut self, buf: &[u8]) -> Result<(), InvalidData>;
-}
-
-#[cfg(feature = "std")]
-impl<W> FileWrite for W
-where
-    W: Write,
-{
-    fn write(&mut self, buf: &[u8]) -> Result<(), InvalidData> {
-        self.write_all(buf).or(Err(InvalidData))
-    }
-}
-
-pub trait PortRead {
-    fn read_byte(&mut self) -> Result<u8, InvalidData>;
-}
-
-#[cfg(feature = "std")]
-impl<R> PortRead for R
-where
-    R: Read,
-{
     fn read_byte(&mut self) -> Result<u8, InvalidData> {
         let mut buf = [0; 1];
         self.read_exact(&mut buf)
@@ -142,17 +131,19 @@ where
     }
 }
 
-pub trait PortWrite {
-    fn write_byte(&mut self, value: u8) -> Result<(), InvalidData>;
-}
-
 #[cfg(feature = "std")]
-impl<W> PortWrite for W
+impl<S> Seek for S
 where
-    W: Write,
+    S: std::io::Seek,
 {
-    fn write_byte(&mut self, value: u8) -> Result<(), InvalidData> {
-        self.write_all(&[value]).or(Err(InvalidData))
+    fn seek(&mut self, offset: u32) -> Result<(), InvalidData> {
+        let new_offset = self
+            .seek(SeekFrom::Start(offset as u64))
+            .or(Err(InvalidData))? as u32;
+        if offset != new_offset {
+            return Err(InvalidData);
+        }
+        Ok(())
     }
 }
 
@@ -187,7 +178,7 @@ impl Header {
 
     pub fn write<P>(&self, port: &mut P) -> core::result::Result<(), InvalidData>
     where
-        P: PortWrite,
+        P: Write,
     {
         let mut out = array_vec!([u8; HEADER_SIZE]);
         port.write_byte(ZPAD)?;
@@ -222,7 +213,7 @@ impl Header {
 
     pub fn read<P>(port: &mut P) -> core::result::Result<Header, InvalidData>
     where
-        P: PortRead,
+        P: Read,
     {
         let encoding = Encoding::try_from(port.read_byte()?)?;
         let mut out = array_vec!([u8; HEADER_SIZE]);
@@ -482,8 +473,8 @@ pub fn write<P, F>(
     size: Option<u32>,
 ) -> core::result::Result<(), InvalidData>
 where
-    P: PortRead + PortWrite,
-    F: FileRead,
+    P: Read + Write,
+    F: Read + Seek,
 {
     let mut stage = Stage::Waiting;
     let mut buf = Buffer::new();
@@ -539,8 +530,8 @@ pub fn read<P, F>(
     file: &mut F,
 ) -> core::result::Result<(), InvalidData>
 where
-    P: PortRead + PortWrite,
-    F: FileWrite,
+    P: Read + Write,
+    F: Write,
 {
     if state.stage == Stage::Waiting {
         assert!(state.file.is_none() && state.count == 0);
@@ -599,7 +590,7 @@ where
 /// Writes ZRINIT
 fn write_zrinit<P>(port: &mut P) -> core::result::Result<(), InvalidData>
 where
-    P: PortWrite,
+    P: Write,
 {
     let zrinit = Zrinit::CANFDX | Zrinit::CANOVIO | Zrinit::CANFC32;
     Header::new(Encoding::ZHEX, Frame::ZRINIT, &[0, 0, 0, zrinit.bits()]).write(port)
@@ -613,7 +604,7 @@ fn write_zfile<P>(
     size: u32,
 ) -> core::result::Result<(), InvalidData>
 where
-    P: PortWrite,
+    P: Write,
 {
     let size = String::<16>::try_from(size).or(Err(InvalidData))?;
     buf.clear();
@@ -638,7 +629,7 @@ fn read_zfile<P>(
     encoding: Encoding,
 ) -> core::result::Result<Option<File>, InvalidData>
 where
-    P: PortRead + PortWrite,
+    P: Read + Write,
 {
     match read_subpacket(port, &mut state.buf, encoding) {
         Ok(_) => {
@@ -665,8 +656,8 @@ fn write_zdata<P, F>(
     offset: u32,
 ) -> core::result::Result<(), InvalidData>
 where
-    P: PortRead + PortWrite,
-    F: FileRead,
+    P: Read + Write,
+    F: Read + Seek,
 {
     let mut offset = offset;
     buf.set_len(PAYLOAD_SIZE - 2);
@@ -707,8 +698,8 @@ fn read_zdata<P, F>(
     file: &mut F,
 ) -> core::result::Result<(), InvalidData>
 where
-    P: PortRead + PortWrite,
-    F: FileWrite,
+    P: Read + Write,
+    F: Write,
 {
     loop {
         let zcrc = match read_subpacket(port, &mut state.buf, encoding) {
@@ -742,7 +733,7 @@ where
 /// Skips (ZPAD, [ZPAD,] ZDLE) sequence.
 fn read_zpad<P>(port: &mut P) -> core::result::Result<(), InvalidData>
 where
-    P: PortRead,
+    P: Read,
 {
     if port.read_byte()? != ZPAD {
         return Err(InvalidData);
@@ -767,7 +758,7 @@ fn read_subpacket<P>(
     encoding: Encoding,
 ) -> core::result::Result<Packet, InvalidData>
 where
-    P: PortRead,
+    P: Read,
 {
     let result;
 
@@ -812,7 +803,7 @@ fn skip_subpacket_tail<P>(
     encoding: Encoding,
 ) -> core::result::Result<Packet, InvalidData>
 where
-    P: PortRead,
+    P: Read,
 {
     let result;
     loop {
@@ -839,7 +830,7 @@ fn write_subpacket<P>(
     data: &[u8],
 ) -> core::result::Result<(), InvalidData>
 where
-    P: PortWrite,
+    P: Write,
 {
     let kind = kind as u8;
     write_slice_escaped(port, data)?;
@@ -892,7 +883,7 @@ fn make_crc(data: &[u8], out: &mut [u8], encoding: Encoding) -> usize {
 #[allow(dead_code)]
 fn write_slice_escaped<P>(port: &mut P, buf: &[u8]) -> Result<(), InvalidData>
 where
-    P: PortWrite,
+    P: Write,
 {
     for value in buf {
         write_byte_escaped(port, *value)?
@@ -903,7 +894,7 @@ where
 
 fn write_byte_escaped<P>(port: &mut P, value: u8) -> Result<(), InvalidData>
 where
-    P: PortWrite,
+    P: Write,
 {
     let escaped = ZDLE_TABLE[value as usize];
     if escaped != value {
@@ -914,7 +905,7 @@ where
 
 fn read_byte_unescaped<P>(port: &mut P) -> core::result::Result<u8, InvalidData>
 where
-    P: PortRead,
+    P: Read,
 {
     let b = port.read_byte()?;
     Ok(if b == ZDLE {
