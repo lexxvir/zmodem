@@ -324,11 +324,6 @@ bitflags! {
     }
 }
 
-#[derive(PartialEq)]
-struct File {
-    name: [u8; 256],
-}
-
 /// The ZMODEM protocol subpacket type
 #[repr(u8)]
 #[allow(clippy::upper_case_acronyms)]
@@ -353,9 +348,9 @@ impl TryFrom<u8> for Packet {
 /// Send or receive transmission state
 pub struct State {
     stage: Stage,
-    file: Option<File>,
     count: u32,
     buf: Buffer,
+    file_name: [u8; 256],
 }
 
 impl Default for State {
@@ -368,9 +363,9 @@ impl State {
     pub const fn new() -> Self {
         State {
             stage: Stage::Waiting,
-            file: None,
             count: 0,
             buf: Buffer::from_array_empty([0; BUFFER_SIZE]),
+            file_name: [0; 256],
         }
     }
 
@@ -459,7 +454,7 @@ where
     F: Write,
 {
     if state.stage == Stage::Waiting {
-        assert!(state.file.is_none() && state.count == 0);
+        assert!(state.count == 0);
         write_zrinit(port)?
     }
     if read_zpad(port).is_err() {
@@ -476,7 +471,7 @@ where
         Frame::ZFILE => match state.stage {
             Stage::Waiting | Stage::Ready => {
                 assert_eq!(state.count, 0);
-                state.file = read_zfile(port, state, header.encoding())?;
+                read_zfile(port, state, header.encoding())?;
                 state.stage = Stage::Ready;
             }
             Stage::InProgress | Stage::Done => (),
@@ -532,7 +527,7 @@ fn write_zfile<P>(
 where
     P: Write,
 {
-    let size = String::<16>::try_from(size).or(Err(Error::Data))?;
+    let size = String::<17>::try_from(size).or(Err(Error::Data))?;
     buf.clear();
     buf.extend_from_slice(name.as_bytes());
     buf.push(b'\0');
@@ -548,18 +543,17 @@ struct ZfileReader {
     file_name: NullString,
 }
 
-/// Read ZFILE
+/// Parses filename and size from the payload of `Frame::ZFiLE`.
 fn read_zfile<P>(
     port: &mut P,
     state: &mut State,
     encoding: Encoding,
-) -> core::result::Result<Option<File>, Error>
+) -> core::result::Result<(), Error>
 where
     P: Read + Write,
 {
     match read_subpacket(port, &mut state.buf, encoding) {
         Ok(_) => {
-            ZRPOS_HEADER.with_count(0).write(port)?;
             let reader: ZfileReader = Cursor::new(&mut state.buf).read_ne().or(Err(Error::Data))?;
             if reader.file_name.len() > 255 {
                 return Err(Error::Data);
@@ -568,9 +562,10 @@ where
             for (i, b) in reader.file_name.as_slice().iter().enumerate() {
                 name[i] = *b;
             }
-            Ok(Some(File { name }))
+            state.file_name = name;
+            ZRPOS_HEADER.with_count(0).write(port)
         }
-        _ => ZNAK_HEADER.write(port).and(Ok(None)),
+        _ => ZNAK_HEADER.write(port).and(Err(Error::Data)),
     }
 }
 
