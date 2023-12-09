@@ -33,66 +33,54 @@ impl<R: Read, W: Write> Write for InOut<R, W> {
 }
 
 const TEST_DATA: &[u8] = include_bytes!("test.bin");
+const TMP_DIR: &str = env!("CARGO_TARGET_TMPDIR");
 
 #[test]
 #[cfg(unix)]
-fn recv_from_sz() {
-    let mut f = File::create("recv_from_sz").unwrap();
-    f.write_all(&TEST_DATA).unwrap();
-
+fn test_from_sz() {
+    let file_name = format!("{TMP_DIR}/from_sz.bin");
+    let mut file = File::create(&file_name).unwrap();
+    file.write_all(&TEST_DATA).unwrap();
     let sz = Command::new("sz")
-        .arg("recv_from_sz")
+        .arg(&file_name)
         .stdout(Stdio::piped())
         .stdin(Stdio::piped())
         .spawn()
-        .expect("sz failed to run");
-
-    let child_stdin = sz.stdin.unwrap();
-    let child_stdout = sz.stdout.unwrap();
-    let mut port = InOut::new(child_stdout, child_stdin);
+        .unwrap();
+    let stdin = sz.stdin.unwrap();
+    let stdout = sz.stdout.unwrap();
+    let mut port = InOut::new(stdout, stdin);
     let mut file = Cursor::new(Vec::new());
     let mut state = zmodem2::State::new();
-
     while state.stage() != zmodem2::Stage::Done {
         assert!(zmodem2::receive(&mut port, &mut file, &mut state) == Ok(()));
     }
-
-    remove_file("recv_from_sz").unwrap();
-
     assert_eq!(TEST_DATA, file.into_inner());
 }
 
 #[test]
 #[cfg(unix)]
-fn send_to_rz() {
-    let _ = remove_file("send_to_rz");
-
+fn test_to_rz() {
+    let file_name = format!("{TMP_DIR}/to_rz.bin");
+    remove_file(&file_name).unwrap_or_default();
     let sz = Command::new("rz")
         .stdout(Stdio::piped())
         .stdin(Stdio::piped())
         .spawn()
-        .expect("rz failed to run");
-
-    let child_stdin = sz.stdin.unwrap();
-    let child_stdout = sz.stdout.unwrap();
-    let mut port = InOut::new(child_stdout, child_stdin);
-
+        .unwrap();
+    let stdin = sz.stdin.unwrap();
+    let stdout = sz.stdout.unwrap();
+    let mut port = InOut::new(stdout, stdin);
     let len = TEST_DATA.len() as u32;
-    let copy = TEST_DATA;
-    let mut file = Cursor::new(&copy);
+    let mut file = Cursor::new(TEST_DATA);
     let mut state = zmodem2::State::new();
-
     while state.stage() != zmodem2::Stage::Done {
-        assert!(zmodem2::send(&mut port, &mut file, &mut state, "send_to_rz", len) == Ok(()));
+        assert!(zmodem2::send(&mut port, &mut file, &mut state, &file_name, len) == Ok(()));
     }
-
-
-    let mut f = File::open("send_to_rz").expect("open 'send_to_rz'");
+    let mut f = File::open(&file_name).unwrap();
     let mut received = Vec::new();
     f.read_to_end(&mut received).unwrap();
-    remove_file("send_to_rz").unwrap();
-
-    assert!(copy == received);
+    assert!(TEST_DATA == received);
 }
 
 #[test]
