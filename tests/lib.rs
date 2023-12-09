@@ -50,20 +50,18 @@ fn recv_from_sz() {
 
     let child_stdin = sz.stdin.unwrap();
     let child_stdout = sz.stdout.unwrap();
-    let mut inout = InOut::new(child_stdout, child_stdin);
-
-    let mut c = Cursor::new(Vec::new());
-
+    let mut port = InOut::new(child_stdout, child_stdin);
+    let mut file = Cursor::new(Vec::new());
     let mut state = zmodem::State::new();
 
     while state.stage() != zmodem::Stage::Done {
-        assert!(zmodem::read(&mut inout, &mut state, &mut c) == Ok(()));
+        assert!(zmodem::read(&mut port, &mut file, &mut state) == Ok(()));
     }
 
     sleep(Duration::from_millis(300));
     remove_file("recv_from_sz").unwrap();
 
-    assert_eq!(TEST_DATA, c.into_inner());
+    assert_eq!(TEST_DATA, file.into_inner());
 }
 
 #[test]
@@ -79,15 +77,16 @@ fn send_to_rz() {
 
     let child_stdin = sz.stdin.unwrap();
     let child_stdout = sz.stdout.unwrap();
-    let mut inout = InOut::new(child_stdout, child_stdin);
+    let mut port = InOut::new(child_stdout, child_stdin);
 
     let len = TEST_DATA.len() as u32;
     let copy = TEST_DATA;
-    let mut cur = Cursor::new(&copy);
+    let mut file = Cursor::new(&copy);
 
     sleep(Duration::from_millis(300));
 
-    assert!(zmodem::write(&mut inout, &mut cur, "send_to_rz", Some(len)) == Ok(()));
+    let mut state = zmodem::State::new();
+    assert!(zmodem::write(&mut port, &mut file, &mut state, "send_to_rz", Some(len)) == Ok(()));
 
     sleep(Duration::from_millis(300));
 
@@ -122,27 +121,28 @@ fn lib_send_recv() {
     spawn(move || {
         let outf = OpenOptions::new().write(true).open("test-fifo1").unwrap();
         let inf = File::open("test-fifo2").unwrap();
-        let mut inout = InOut::new(inf, outf);
+        let mut port = InOut::new(inf, outf);
 
         let origin = TEST_DATA;
-        let mut c = Cursor::new(&origin);
+        let mut file = Cursor::new(&origin);
 
-        assert!(zmodem::write(&mut inout, &mut c, "test", None) == Ok(()));
+        let mut state = zmodem::State::new();
+        assert!(zmodem::write(&mut port, &mut file, &mut state, "test", None) == Ok(()));
     });
 
-    let mut c = Cursor::new(Vec::new());
+    let mut file = Cursor::new(Vec::new());
 
     let inf = File::open("test-fifo1").unwrap();
     let outf = OpenOptions::new().write(true).open("test-fifo2").unwrap();
-    let mut inout = InOut::new(inf, outf);
+    let mut port = InOut::new(inf, outf);
 
     let mut state = zmodem::State::new();
     while state.stage() != zmodem::Stage::Done {
-        assert!(zmodem::read(&mut inout, &mut state, &mut c) == Ok(()));
+        assert!(zmodem::read(&mut port, &mut file, &mut state) == Ok(()));
     }
 
     let _ = remove_file("test-fifo1");
     let _ = remove_file("test-fifo2");
 
-    assert_eq!(TEST_DATA, c.into_inner());
+    assert_eq!(TEST_DATA, file.into_inner());
 }

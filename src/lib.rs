@@ -2,7 +2,6 @@
 //! ZMODEM file transfer protocol
 
 #![cfg_attr(not(feature = "std"), no_std)]
-
 #[cfg(feature = "std")]
 mod std;
 
@@ -30,16 +29,13 @@ const ZRQINIT_HEADER: Header = Header::new(Encoding::ZHEX, Frame::ZRQINIT, &[0; 
 
 /// Size of the unescaped subpacket payload. The size was picked based on
 /// maximum subpacket size in the original 1988 ZMODEM specification.
-const PAYLOAD_SIZE: usize = 1024;
+const BUFFER_SIZE: usize = 1024;
 
 /// Buffer size with enough capacity for an escaped header
 const HEADER_SIZE: usize = 32;
 
 /// The number of subpackets to stream
 const SUBPACKET_PER_ACK: usize = 10;
-
-/// Buffer for the escaped data
-type Buffer = ArrayVec<[u8; PAYLOAD_SIZE]>;
 
 /// https://play.rust-lang.org/?version=stable&mode=debug&edition=2021&gist=20db24d9f0aaff4d13f0144416f34d46
 const ZDLE_TABLE: [u8; 0x100] = [
@@ -80,6 +76,9 @@ pub const UNZDLE_TABLE: [u8; 0x100] = [
     0xe0, 0xe1, 0xe2, 0xe3, 0xe4, 0xe5, 0xe6, 0xe7, 0xe8, 0xe9, 0xea, 0xeb, 0xec, 0xed, 0xee, 0xef,
     0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa, 0xfb, 0xfc, 0xfd, 0xfe, 0xff,
 ];
+
+/// Buffer for the escaped data
+type Buffer = ArrayVec<[u8; BUFFER_SIZE]>;
 
 #[derive(PartialEq)]
 pub struct InvalidData;
@@ -371,7 +370,7 @@ impl State {
             stage: Stage::Waiting,
             file: None,
             count: 0,
-            buf: Buffer::from_array_empty([0; PAYLOAD_SIZE]),
+            buf: Buffer::from_array_empty([0; BUFFER_SIZE]),
         }
     }
 
@@ -392,6 +391,7 @@ pub enum Stage {
 pub fn write<P, F>(
     port: &mut P,
     file: &mut F,
+    state: &mut State,
     name: &str,
     size: Option<u32>,
 ) -> core::result::Result<(), InvalidData>
@@ -399,8 +399,7 @@ where
     P: Read + Write,
     F: Read + Seek,
 {
-    let mut stage = Stage::Waiting;
-    let mut buf = Buffer::new();
+    state.stage = Stage::Waiting;
     ZRQINIT_HEADER.write(port)?;
     loop {
         if read_zpad(port).is_err() {
@@ -414,25 +413,25 @@ where
             Ok(frame) => frame,
         };
         match frame.frame() {
-            Frame::ZRINIT => match stage {
+            Frame::ZRINIT => match state.stage {
                 Stage::Waiting => {
                     let size = size.unwrap_or(0);
-                    write_zfile(port, &mut buf, name, size)?;
-                    stage = Stage::Ready;
+                    write_zfile(port, &mut state.buf, name, size)?;
+                    state.stage = Stage::Ready;
                 }
                 Stage::Receiving => ZFIN_HEADER.write(port)?,
                 _ => (),
             },
             Frame::ZRPOS | Frame::ZACK => {
-                if stage == Stage::Waiting {
+                if state.stage == Stage::Waiting {
                     ZRQINIT_HEADER.write(port)?;
                 } else {
-                    write_zdata(port, &mut buf, file, frame.count())?;
-                    stage = Stage::Receiving;
+                    write_zdata(port, &mut state.buf, file, frame.count())?;
+                    state.stage = Stage::Receiving;
                 }
             }
             _ => {
-                if stage == Stage::Waiting {
+                if state.stage == Stage::Waiting {
                     ZRQINIT_HEADER.write(port)?;
                 } else {
                     port.write_byte(b'O')?;
@@ -449,8 +448,8 @@ where
 /// Receives a file using the ZMODEM file transfer protocol.
 pub fn read<P, F>(
     port: &mut P,
-    state: &mut State,
     file: &mut F,
+    state: &mut State,
 ) -> core::result::Result<(), InvalidData>
 where
     P: Read + Write,
@@ -583,7 +582,7 @@ where
     F: Read + Seek,
 {
     let mut offset = offset;
-    buf.set_len(PAYLOAD_SIZE - 2);
+    buf.set_len(BUFFER_SIZE - 2);
     file.seek(offset)?;
     let mut count: u32 = file.read(buf)?;
     if count == 0 {
