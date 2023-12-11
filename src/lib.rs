@@ -207,7 +207,7 @@ impl Header {
             out.push(read_byte_unescaped(port)?);
         }
         if encoding == Encoding::ZHEX {
-            hex::decode_in_slice(&mut out).or(Err(Error::Data))?;
+            hex::decode_in_slice(&mut out).map_err(|_| Error::Data)?;
             out.truncate(out.len() / 2);
         }
         check_crc(&out[..5], &out[5..], encoding)?;
@@ -298,7 +298,7 @@ pub enum Frame {
     ZFREECNT = 17,
     /// Command from sending program
     ZCOMMAND = 18,
-    ///  Output to standard error, data follows
+    /// Output to standard error, data follows
     ZSTDERR = 19,
 }
 
@@ -702,17 +702,14 @@ fn read_subpacket<P>(
 where
     P: Read,
 {
-    let result;
-
     buf.clear();
-    loop {
+    let result = loop {
         let byte = port.read_byte()?;
         if byte == ZDLE {
             let byte = port.read_byte()?;
             if let Ok(packet) = Packet::try_from(byte) {
                 buf.push(packet as u8);
-                result = packet;
-                break;
+                break packet;
             } else {
                 buf.push(UNZDLE_TABLE[byte as usize]);
             }
@@ -725,7 +722,7 @@ where
             buf.set_len(0);
             return Ok(packet);
         }
-    }
+    };
 
     let crc_len = if encoding == Encoding::ZBIN32 { 4 } else { 2 };
     let mut crc = [0u8; 4];
