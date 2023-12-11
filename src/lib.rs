@@ -160,7 +160,7 @@ impl Header {
     }
 
     /// Encodes and writes the header to the I/O port
-    pub fn write<P>(&self, port: &mut P) -> core::result::Result<(), Error>
+    pub fn write<P>(&self, port: &mut P) -> Result<(), Error>
     where
         P: Write,
     {
@@ -197,7 +197,7 @@ impl Header {
 
     /// Reads and decodes a header from the I/O port, and return a new
     /// instance
-    pub fn read<P>(port: &mut P) -> core::result::Result<Header, Error>
+    pub fn read<P>(port: &mut P) -> Result<Header, Error>
     where
         P: Read,
     {
@@ -413,7 +413,7 @@ pub fn send<P, F>(
     state: &mut State,
     name: &str,
     size: u32,
-) -> core::result::Result<(), Error>
+) -> Result<(), Error>
 where
     P: Read + Write,
     F: Read + Seek,
@@ -471,7 +471,7 @@ pub fn receive<P, F>(
     port: &mut P,
     file: &mut F,
     state: &mut State,
-) -> core::result::Result<(), Error>
+) -> Result<(), Error>
 where
     P: Read + Write,
     F: Write,
@@ -532,7 +532,7 @@ where
 }
 
 /// Writes ZRINIT
-fn write_zrinit<P>(port: &mut P) -> core::result::Result<(), Error>
+fn write_zrinit<P>(port: &mut P) -> Result<(), Error>
 where
     P: Write,
 {
@@ -546,7 +546,7 @@ fn write_zfile<P>(
     buf: &mut Buffer,
     name: &str,
     size: u32,
-) -> core::result::Result<(), Error>
+) -> Result<(), Error>
 where
     P: Write,
 {
@@ -566,7 +566,7 @@ fn read_zfile<P>(
     port: &mut P,
     state: &mut State,
     encoding: Encoding,
-) -> core::result::Result<(), Error>
+) -> Result<(), Error>
 where
     P: Read + Write,
 {
@@ -595,7 +595,7 @@ fn write_zdata<P, F>(
     buf: &mut Buffer,
     file: &mut F,
     offset: u32,
-) -> core::result::Result<(), Error>
+) -> Result<(), Error>
 where
     P: Read + Write,
     F: Read + Seek,
@@ -637,7 +637,7 @@ fn read_zdata<P, F>(
     state: &mut State,
     encoding: Encoding,
     file: &mut F,
-) -> core::result::Result<(), Error>
+) -> Result<(), Error>
 where
     P: Read + Write,
     F: Write,
@@ -673,7 +673,7 @@ where
 }
 
 /// Skips (ZPAD, [ZPAD,] ZDLE) sequence.
-fn read_zpad<P>(port: &mut P) -> core::result::Result<(), Error>
+fn read_zpad<P>(port: &mut P) -> Result<(), Error>
 where
     P: Read,
 {
@@ -698,7 +698,7 @@ fn read_subpacket<P>(
     port: &mut P,
     buf: &mut Buffer,
     encoding: Encoding,
-) -> core::result::Result<Packet, Error>
+) -> Result<Packet, Error>
 where
     P: Read,
 {
@@ -736,7 +736,7 @@ where
 }
 
 /// Skips the tail of the subpacket (including CRC).
-fn skip_subpacket_tail<P>(port: &mut P, encoding: Encoding) -> core::result::Result<Packet, Error>
+fn skip_subpacket_tail<P>(port: &mut P, encoding: Encoding) -> Result<Packet, Error>
 where
     P: Read,
 {
@@ -763,7 +763,7 @@ fn write_subpacket<P>(
     encoding: Encoding,
     kind: Packet,
     data: &[u8],
-) -> core::result::Result<(), Error>
+) -> Result<(), Error>
 where
     P: Write,
 {
@@ -790,7 +790,7 @@ where
     }
 }
 
-fn check_crc(data: &[u8], crc: &[u8], encoding: Encoding) -> core::result::Result<(), Error> {
+fn check_crc(data: &[u8], crc: &[u8], encoding: Encoding) -> Result<(), Error> {
     let mut crc2 = [0u8; 4];
     let crc2_len = make_crc(data, &mut crc2, encoding);
     if *crc == crc2[..crc2_len] {
@@ -835,7 +835,7 @@ where
     port.write_byte(escaped)
 }
 
-fn read_byte_unescaped<P>(port: &mut P) -> core::result::Result<u8, Error>
+fn read_byte_unescaped<P>(port: &mut P) -> Result<u8, Error>
 where
     P: Read,
 {
@@ -912,7 +912,7 @@ mod tests {
     #[case(&[ZPAD, ZPAD, XON], Err(Error::Data))]
     #[case(&[], Err(Error::Read))]
     #[case(&[0; 100], Err(Error::Data))]
-    pub fn test_zpad_read(#[case] port: &[u8], #[case] expected: core::result::Result<(), Error>) {
+    pub fn test_zpad_read(#[case] port: &[u8], #[case] expected: Result<(), Error>) {
         assert!(read_zpad(&mut port.to_vec().as_slice()) == expected);
     }
 }
