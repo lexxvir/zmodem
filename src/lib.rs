@@ -12,6 +12,8 @@
 //! 3. If the returned `zmodem2::Stage` is not yet `zmodem2::Stage::Done`, go
 //!    back to step 2.
 
+#![deny(clippy::all)]
+#![deny(clippy::pedantic)]
 #![cfg_attr(not(feature = "std"), no_std)]
 #[cfg(feature = "std")]
 mod std;
@@ -107,7 +109,22 @@ pub enum Error {
 
 /// Write I/O operations
 pub trait Write {
+    /// Attempts to write the entire buffer
+    ///
+    /// # Errors
+    ///
+    /// * `Err(Error::Read)` when the read I/O fails with the serial port
+    /// * `Err(Error::Write)` when the write I/O fails with the serial port
+    /// * `Err(Error::Data)` when corrupted data has been detected
     fn write_all(&mut self, buf: &[u8]) -> Result<(), Error>;
+
+    /// Attempts to write a single byte
+    ///
+    /// # Errors
+    ///
+    /// * `Err(Error::Read)` when the read I/O fails with the serial port
+    /// * `Err(Error::Write)` when the write I/O fails with the serial port
+    /// * `Err(Error::Data)` when corrupted data has been detected
     fn write_byte(&mut self, value: u8) -> Result<(), Error> {
         self.write_all(&[value])
     }
@@ -115,12 +132,34 @@ pub trait Write {
 
 /// Read I/O operations
 pub trait Read {
+    /// Reads some bytes to the buffeer
+    ///
+    /// # Errors
+    ///
+    /// * `Err(Error::Read)` when the read I/O fails with the serial port
+    /// * `Err(Error::Write)` when the write I/O fails with the serial port
+    /// * `Err(Error::Data)` when corrupted data has been detected
     fn read(&mut self, buf: &mut [u8]) -> Result<u32, Error>;
+
+    /// Reads exactly one byte to the buffer
+    ///
+    /// # Errors
+    ///
+    /// * `Err(Error::Read)` when the read I/O fails with the serial port
+    /// * `Err(Error::Write)` when the write I/O fails with the serial port
+    /// * `Err(Error::Data)` when corrupted data has been detected
     fn read_byte(&mut self) -> Result<u8, Error>;
 }
 
 /// Seek I/O operations
 pub trait Seek {
+    /// Seeks to an offset
+    ///
+    /// # Errors
+    ///
+    /// * `Err(Error::Read)` when the read I/O fails with the serial port
+    /// * `Err(Error::Write)` when the write I/O fails with the serial port
+    /// * `Err(Error::Data)` when corrupted data has been detected
     fn seek(&mut self, offset: u32) -> Result<(), Error>;
 }
 
@@ -136,6 +175,7 @@ pub struct Header {
 
 impl Header {
     /// Creates a new instance
+    #[must_use]
     pub const fn new(encoding: Encoding, frame: Frame, flags: &[u8; 4]) -> Self {
         Self {
             encoding,
@@ -145,21 +185,30 @@ impl Header {
     }
 
     /// Returns `Encoding` of the frame
+    #[must_use]
     pub const fn encoding(&self) -> Encoding {
         self.encoding
     }
 
     /// Returns `Frame`, containing the frame type
+    #[must_use]
     pub const fn frame(&self) -> Frame {
         self.frame
     }
 
     /// Returns count for the frame types using this field
+    #[must_use]
     pub const fn count(&self) -> u32 {
         u32::from_le_bytes(self.flags)
     }
 
-    /// Encodes and writes the header to the I/O port
+    /// Encodes and writes the header to the serial port
+    ///
+    /// # Errors
+    ///
+    /// * `Err(Error::Read)` when the read I/O fails with the serial port
+    /// * `Err(Error::Write)` when the write I/O fails with the serial port
+    /// * `Err(Error::Data)` when corrupted data has been detected
     pub fn write<P>(&self, port: &mut P) -> Result<(), Error>
     where
         P: Write,
@@ -195,8 +244,14 @@ impl Header {
         Ok(())
     }
 
-    /// Reads and decodes a header from the I/O port, and return a new
+    /// Reads and decodes a header from the serial port, and returns a new
     /// instance
+    ///
+    /// # Errors
+    ///
+    /// * `Err(Error::Read)` when the read I/O fails with the serial port
+    /// * `Err(Error::Write)` when the write I/O fails with the serial port
+    /// * `Err(Error::Data)` when corrupted data has been detected
     pub fn read<P>(port: &mut P) -> Result<Header, Error>
     where
         P: Read,
@@ -219,6 +274,7 @@ impl Header {
 
     /// Returns a new instance with the flags substitude with a count
     /// for the frame types using this field.
+    #[must_use]
     pub const fn with_count(&self, count: u32) -> Self {
         Header::new(self.encoding, self.frame, &count.to_le_bytes())
     }
@@ -251,7 +307,7 @@ impl TryFrom<u8> for Encoding {
     fn try_from(value: u8) -> Result<Self, Self::Error> {
         Encoding::iter()
             .find(|e| value == *e as u8)
-            .map_or(Err(Error::Data), Ok)
+            .ok_or(Error::Data)
     }
 }
 
@@ -306,9 +362,7 @@ impl TryFrom<u8> for Frame {
     type Error = Error;
 
     fn try_from(value: u8) -> Result<Self, Self::Error> {
-        Frame::iter()
-            .find(|t| value == *t as u8)
-            .map_or(Err(Error::Data), Ok)
+        Frame::iter().find(|t| value == *t as u8).ok_or(Error::Data)
     }
 }
 
@@ -351,7 +405,7 @@ impl TryFrom<u8> for Packet {
     fn try_from(value: u8) -> Result<Self, Self::Error> {
         Packet::iter()
             .find(|e| value == *e as u8)
-            .map_or(Err(Error::Data), Ok)
+            .ok_or(Error::Data)
     }
 }
 
@@ -371,6 +425,7 @@ impl Default for State {
 }
 
 impl State {
+    #[must_use]
     pub const fn new() -> Self {
         State {
             stage: Stage::Waiting,
@@ -381,18 +436,22 @@ impl State {
         }
     }
 
+    #[must_use]
     pub fn stage(&self) -> Stage {
         self.stage
     }
 
+    #[must_use]
     pub fn count(&self) -> u32 {
         self.count
     }
 
+    #[must_use]
     pub fn file_name(&self) -> &str {
         &self.file_name
     }
 
+    #[must_use]
     pub fn file_size(&self) -> u32 {
         self.file_size
     }
@@ -407,6 +466,12 @@ pub enum Stage {
 }
 
 /// Sends a file using the ZMODEM file transfer protocol.
+///
+/// # Errors
+///
+/// * `Err(Error::Read)` when the read I/O fails with the serial port
+/// * `Err(Error::Write)` when the write I/O fails with the serial port
+/// * `Err(Error::Data)` when corrupted data has been detected
 pub fn send<P, F>(
     port: &mut P,
     file: &mut F,
@@ -467,18 +532,19 @@ where
 }
 
 /// Receives a file using the ZMODEM file transfer protocol.
-pub fn receive<P, F>(
-    port: &mut P,
-    file: &mut F,
-    state: &mut State,
-) -> Result<(), Error>
+///
+/// # Errors
+///
+/// * `Err(Error::Read)` when the read I/O fails with the serial port
+/// * `Err(Error::Write)` when the write I/O fails with the serial port
+/// * `Err(Error::Data)` when corrupted data has been detected
+pub fn receive<P, F>(port: &mut P, file: &mut F, state: &mut State) -> Result<(), Error>
 where
     P: Read + Write,
     F: Write,
 {
     if state.stage == Stage::Waiting {
-        assert!(state.count == 0);
-        write_zrinit(port)?
+        write_zrinit(port)?;
     }
     if read_zpad(port).is_err() {
         return Ok(());
@@ -493,7 +559,6 @@ where
     match header.frame() {
         Frame::ZFILE => match state.stage {
             Stage::Waiting | Stage::Ready => {
-                assert_eq!(state.count, 0);
                 read_zfile(port, state, header.encoding())?;
                 state.stage = Stage::Ready;
             }
@@ -514,7 +579,7 @@ where
         Frame::ZEOF => match state.stage {
             Stage::InProgress => {
                 if header.count() == state.count {
-                    write_zrinit(port)?
+                    write_zrinit(port)?;
                 }
             }
             Stage::Waiting | Stage::Ready | Stage::Done => (),
@@ -541,12 +606,7 @@ where
 }
 
 /// Write ZRFILE
-fn write_zfile<P>(
-    port: &mut P,
-    buf: &mut Buffer,
-    name: &str,
-    size: u32,
-) -> Result<(), Error>
+fn write_zfile<P>(port: &mut P, buf: &mut Buffer, name: &str, size: u32) -> Result<(), Error>
 where
     P: Write,
 {
@@ -562,11 +622,7 @@ where
 
 /// Parses filename and size from the subpacket sent after the `Frame::ZFiLE`
 /// header.
-fn read_zfile<P>(
-    port: &mut P,
-    state: &mut State,
-    encoding: Encoding,
-) -> Result<(), Error>
+fn read_zfile<P>(port: &mut P, state: &mut State, encoding: Encoding) -> Result<(), Error>
 where
     P: Read + Write,
 {
@@ -590,12 +646,7 @@ where
 }
 
 /// Writes ZDATA
-fn write_zdata<P, F>(
-    port: &mut P,
-    buf: &mut Buffer,
-    file: &mut F,
-    offset: u32,
-) -> Result<(), Error>
+fn write_zdata<P, F>(port: &mut P, buf: &mut Buffer, file: &mut F, offset: u32) -> Result<(), Error>
 where
     P: Read + Write,
     F: Read + Seek,
@@ -657,7 +708,7 @@ where
             Err(err) => return Err(err),
         };
         file.write_all(&state.buf)?;
-        state.count += state.buf.len() as u32;
+        state.count += u32::try_from(state.buf.len()).map_err(|_| Error::Data)?;
         match zcrc {
             Packet::ZCRCW => {
                 ZACK_HEADER.with_count(state.count).write(port)?;
@@ -694,11 +745,7 @@ where
 }
 
 /// Reads and unescapes a ZMODEM protocol subpacket
-fn read_subpacket<P>(
-    port: &mut P,
-    buf: &mut Buffer,
-    encoding: Encoding,
-) -> Result<Packet, Error>
+fn read_subpacket<P>(port: &mut P, buf: &mut Buffer, encoding: Encoding) -> Result<Packet, Error>
 where
     P: Read,
 {
@@ -818,7 +865,7 @@ where
     P: Write,
 {
     for value in buf {
-        write_byte_escaped(port, *value)?
+        write_byte_escaped(port, *value)?;
     }
 
     Ok(())

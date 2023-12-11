@@ -1,4 +1,4 @@
-use std::io::*;
+use std::io::{stdin, stdout, Read, Result, Stdin, Stdout, Write};
 
 pub struct CombinedStdInOut {
     stdin: Stdin,

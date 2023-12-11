@@ -15,13 +15,13 @@ where
     R: std::io::Read,
 {
     fn read(&mut self, buf: &mut [u8]) -> Result<u32, Error> {
-        Ok(self.read(buf).or(Err(Error::Read))? as u32)
+        u32::try_from(self.read(buf).map_err(|_| Error::Read)?).map_err(|_| Error::Data)
     }
 
     fn read_byte(&mut self) -> Result<u8, Error> {
         let mut buf = [0; 1];
         self.read_exact(&mut buf)
-            .map(|_| buf[0])
+            .map(|()| buf[0])
             .or(Err(Error::Read))
     }
 }
@@ -31,9 +31,11 @@ where
     S: std::io::Seek,
 {
     fn seek(&mut self, offset: u32) -> Result<(), Error> {
-        let new_offset = self
-            .seek(SeekFrom::Start(offset as u64))
-            .or(Err(Error::Data))? as u32;
+        let new_offset = u32::try_from(
+            self.seek(SeekFrom::Start(u64::from(offset)))
+                .or(Err(Error::Data))?,
+        )
+        .map_err(|_| Error::Data)?;
         if offset != new_offset {
             return Err(Error::Read);
         }

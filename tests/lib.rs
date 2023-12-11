@@ -39,7 +39,7 @@ const TMP_DIR: &str = env!("CARGO_TARGET_TMPDIR");
 fn test_from_sz() {
     let file_name = format!("{TMP_DIR}/from_sz.bin");
     let mut file = File::create(&file_name).unwrap();
-    file.write_all(&TEST_DATA).unwrap();
+    file.write_all(TEST_DATA).unwrap();
     let sz = Command::new("sz")
         .arg(&file_name)
         .stdout(Stdio::piped())

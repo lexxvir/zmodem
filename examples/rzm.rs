@@ -24,7 +24,7 @@ fn main() {
     let mut buf = vec![];
     while state.stage() != zmodem2::Stage::InProgress {
         match zmodem2::receive(&mut port, &mut buf, &mut state) {
-            Ok(_) => continue,
+            Ok(()) => continue,
             _ => {
                 eprintln!("RX error");
                 return;
@@ -45,7 +45,7 @@ fn main() {
     file.write_all(&buf).unwrap();
     while state.stage() != zmodem2::Stage::Done {
         match zmodem2::receive(&mut port, &mut file, &mut state) {
-            Ok(_) => {
+            Ok(()) => {
                 eprintln!("RX {} / {}", state.count(), state.file_size());
                 continue;
             }
