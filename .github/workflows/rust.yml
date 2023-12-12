@@ -18,6 +18,8 @@ jobs:
     - uses: actions/checkout@v3
     - name: Install xmllint
       run: sudo apt-get install -y lrzsz
+    - name: Clippy
+      run: cargo clippy
     - name: Build
       run: cargo build --verbose
     - name: Run tests
