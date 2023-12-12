@@ -1,0 +1,17 @@
+name: Commisery
+on:
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  commit-message:
+    name: Conventional Commit compliance
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check for compliance
+        uses: tomtom-international/commisery-action@v2
+        with:
+          token: ${{ github.token }}
+          validate-pull-request: true
+          validate-commits: true
