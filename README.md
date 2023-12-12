@@ -6,21 +6,13 @@ Arbuzov. The crate does not use heap and can be compiled for `no_std`.
 
 # Contributing
 
-1. Create issue for any pull request. Use `Closes: #<id>` in the top most commit
-   to close the pull request.
-2. Commit messages: https://www.conventionalcommits.org/en/v1.0.0/
-3. Run `cargo clippy` and `cargo t`.
-4. Preferably write a short description to the commit what it does, and why it
-   does what it does (i.e. motivation).
-
-# Roadmap
-
-For 0.1 `async` support is purposely left out to future version because for the
-first release functional correctness is the priority over anything else.
-However, the API is made sequential per ZMODEM subpacket, which should be
-good enough to display updated status information on the transfer progress.
-
-# Development environment
-
-* Running `cargo t` requires `lrzsz`.
-* To try out `no_std` build, build with `cargo b --no-default-featuers`.
+1. For larger changes, please create an issue. For small and cosmetic PR's just
+   a PR is good enough.
+2. Use `Closes: #<issue>` when the issue exists.
+3. For large singular commits, preferably write also a description to the commit
+   message.
+4. Add `Signed-off-by: Firstname Lastname <email@address.com>` to the commmits
+   (i.e. `git commit -s`).
+5. Try to separate changes into
+   [logical pieces](https://www.kernel.org/doc/html/latest/process/submitting-patches.html#separate-your-changes)
+   in a pull requests with multiple commits.
