@@ -72,9 +72,9 @@ fn test_to_rz() {
     let mut port = InOut::new(stdout, stdin);
     let len = TEST_DATA.len() as u32;
     let mut file = Cursor::new(TEST_DATA);
-    let mut state = zmodem2::State::new();
+    let mut state = zmodem2::State::new_file(&file_name, len).unwrap();
     while state.stage() != zmodem2::Stage::Done {
-        assert!(zmodem2::send(&mut port, &mut file, &mut state, &file_name, len) == Ok(()));
+        assert!(zmodem2::send(&mut port, &mut file, &mut state) == Ok(()));
     }
     let mut f = File::open(&file_name).unwrap();
     let mut received = Vec::new();

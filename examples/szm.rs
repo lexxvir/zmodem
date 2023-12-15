@@ -22,16 +22,8 @@ fn main() {
     let filename = Path::new(&args.file_name).file_name().unwrap();
     let size = file.metadata().map(|x| x.len() as u32).unwrap();
     let mut port = stdinout::CombinedStdInOut::new();
-    let mut state = zmodem2::State::new();
+    let mut state = zmodem2::State::new_file(filename.to_str().unwrap(), size).unwrap();
     while state.stage() != zmodem2::Stage::Done {
-        assert!(
-            zmodem2::send(
-                &mut port,
-                &mut file,
-                &mut state,
-                filename.to_str().unwrap(),
-                size
-            ) == Ok(())
-        );
+        assert!(zmodem2::send(&mut port, &mut file, &mut state,) == Ok(()));
     }
 }

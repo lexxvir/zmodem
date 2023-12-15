@@ -97,7 +97,7 @@ const ZRQINIT_HEADER: Header = Header::new(Encoding::ZHEX, Frame::ZRQINIT, &[0; 
 type Buffer = ArrayVec<[u8; BUFFER_SIZE]>;
 
 /// Error codes for `zmodem2::send` and `zmodem2::receive`
-#[derive(PartialEq)]
+#[derive(Debug, PartialEq)]
 pub enum Error {
     /// The received data failed validation
     Data,
@@ -425,15 +425,34 @@ impl Default for State {
 }
 
 impl State {
+    /// Create a new transmission context
     #[must_use]
     pub const fn new() -> Self {
-        State {
+        Self {
             stage: Stage::Waiting,
             count: 0,
             file_name: String::new(),
             file_size: 0,
             buf: Buffer::from_array_empty([0; BUFFER_SIZE]),
         }
+    }
+
+    /// Create a new transmission context with file name and size
+    ///
+    /// # Errors
+    ///
+    /// * `Err(Error::Read)` when the read I/O fails with the serial port
+    /// * `Err(Error::Write)` when the write I/O fails with the serial port
+    /// * `Err(Error::Data)` when corrupted data has been detected
+    pub fn new_file(file_name: &str, file_size: u32) -> Result<Self, Error> {
+        let file_name = String::from_str(file_name).or(Err(Error::Data))?;
+        Ok(Self {
+            stage: Stage::Waiting,
+            count: 0,
+            file_name,
+            file_size,
+            buf: Buffer::from_array_empty([0; BUFFER_SIZE]),
+        })
     }
 
     #[must_use]
@@ -472,13 +491,7 @@ pub enum Stage {
 /// * `Err(Error::Read)` when the read I/O fails with the serial port
 /// * `Err(Error::Write)` when the write I/O fails with the serial port
 /// * `Err(Error::Data)` when corrupted data has been detected
-pub fn send<P, F>(
-    port: &mut P,
-    file: &mut F,
-    state: &mut State,
-    name: &str,
-    size: u32,
-) -> Result<(), Error>
+pub fn send<P, F>(port: &mut P, file: &mut F, state: &mut State) -> Result<(), Error>
 where
     P: Read + Write,
     F: Read + Seek,
@@ -499,7 +512,7 @@ where
     match frame.frame() {
         Frame::ZRINIT => match state.stage {
             Stage::Waiting => {
-                write_zfile(port, &mut state.buf, name, size)?;
+                write_zfile(port, &mut state.buf, &state.file_name, state.file_size)?;
                 state.stage = Stage::Ready;
             }
             Stage::InProgress => ZFIN_HEADER.write(port)?,
